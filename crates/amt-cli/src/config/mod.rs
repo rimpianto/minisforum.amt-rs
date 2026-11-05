@@ -21,14 +21,30 @@ pub fn candidates() -> Vec<PathBuf> {
         }
     }
     if let Some(home) = home() {
-        out.push(home.join(".config/amt/config.yaml"));
+        #[cfg(windows)]
+        {
+            // The Windows default: %APPDATA%\amt\config.yaml.
+            if let Some(appdata) = std::env::var_os("APPDATA") {
+                out.push(PathBuf::from(appdata).join("amt/config.yaml"));
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            out.push(home.join(".config/amt/config.yaml"));
+        }
+        // The place this tool used first (`~/.amt/config.yaml`), which still
+        // works so nobody has to move a file.
         out.push(home.join(".amt/config.yaml"));
     }
     out
 }
 
 fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    // HOME first (Unix convention, and what Cygwin/MSYS shells set); on
+    // Windows HOME is normally undefined, so fall back to USERPROFILE.
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// The config file in use, if there is one.
@@ -251,4 +267,101 @@ pub fn with_env_overrides(mut machine: Machine) -> Result<Machine> {
         );
     }
     Ok(machine)
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    /// The tests below mutate the process-wide environment. Rust runs tests
+    /// on parallel threads, so every test that touches these variables takes
+    /// this lock first and restores the previous values on drop.
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Removes the given variables for the duration of the test and puts
+    /// back whatever was there before.
+    pub(crate) struct EnvGuard(Vec<(&'static str, Option<OsString>)>);
+
+    impl EnvGuard {
+        pub(crate) fn new(vars: &[&'static str]) -> Self {
+            let saved = vars.iter().map(|k| (*k, std::env::var_os(k))).collect();
+            for k in vars {
+                std::env::remove_var(k);
+            }
+            EnvGuard(saved)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.0 {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::test_support::{EnvGuard, ENV_LOCK};
+
+    #[test]
+    fn windows_default_candidates_use_appdata_then_legacy_userprofile() {
+        let _lock = ENV_LOCK.lock();
+        let _env = EnvGuard::new(&[
+            "AMT_CONFIG",
+            "XDG_CONFIG_HOME",
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+        ]);
+        let home = std::env::temp_dir().join(format!("amt-test-{}", std::process::id()));
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("APPDATA", home.join("AppData").join("Roaming"));
+
+        let cands = candidates();
+
+        assert_eq!(
+            cands[0],
+            home.join("AppData").join("Roaming").join("amt/config.yaml"),
+            "the Windows default config location must be %APPDATA%\\amt\\config.yaml"
+        );
+        assert_eq!(
+            cands[1],
+            home.join(".amt/config.yaml"),
+            "the legacy location must resolve from USERPROFILE without HOME"
+        );
+    }
+
+    #[test]
+    fn explicit_and_xdg_config_still_take_precedence_over_the_windows_default() {
+        let _lock = ENV_LOCK.lock();
+        let _env = EnvGuard::new(&[
+            "AMT_CONFIG",
+            "XDG_CONFIG_HOME",
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+        ]);
+        let home = std::env::temp_dir().join(format!("amt-test-{}", std::process::id()));
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("APPDATA", home.join("AppData").join("Roaming"));
+        std::env::set_var("AMT_CONFIG", home.join("explicit.yaml"));
+        std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
+
+        let cands = candidates();
+
+        assert_eq!(cands[0], home.join("explicit.yaml"));
+        assert_eq!(cands[1], home.join("xdg").join("amt/config.yaml"));
+        assert_eq!(
+            cands[2],
+            home.join("AppData").join("Roaming").join("amt/config.yaml"),
+            "AMT_CONFIG and XDG_CONFIG_HOME must outrank the Windows default"
+        );
+    }
 }
