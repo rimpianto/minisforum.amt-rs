@@ -1,37 +1,34 @@
 # Copy to ~/.config/amt/config.yaml (or $XDG_CONFIG_HOME/amt/config.yaml,
 # or anywhere with AMT_CONFIG=/path/to/config.yaml) and chmod 600.
-# ~/.amt/config.yaml is still read, for configs written before the move.
-# No credentials are ever committed.
+# ~/.amt/config.yaml is still read for configurations written before the move.
+# Never commit the real configuration or its credentials.
 #
-# Any number of machines, one used at a time. `default:` is what a bare
-# command talks to; `--machine <name>` (or AMT_MACHINE) picks another one,
-# and `amt-cli machines` lists them.
-default: ms02
+# `default:` selects the machine used by a bare command. `--machine <name>`
+# or AMT_MACHINE selects another one; `amt-cli machines` lists all targets.
+default: primary
 
 machines:
-  ms02:
-    host: 192.168.99.153   # AMT of the Minisforum MS-02 Ultra
-    port: 16993            # WS-Man over TLS; 16992 is closed on this firmware
+  primary:
+    host: 192.0.2.10         # RFC 5737 documentation address: replace it
+    port: 16993              # WS-Man over TLS
     username: admin
     password: CHANGE_ME
 
-  lab:
-    host: 192.168.99.160
+  secondary:
+    host: 198.51.100.20      # RFC 5737 documentation address: replace it
     port: 16993
     username: admin
     password: CHANGE_ME
-    # Where the redirection service (KVM, SOL) listens. The firmware puts it
-    # two ports above WS-Man, which is what happens when this is omitted.
+    # Optional: defaults to the WS-Man port + 2 (16993 -> 16995).
     redirection_port: 16995
-    # Optional: the MAC of the management interface. Nothing on the wire uses
-    # it, it is here to tell two machines apart in a lease table.
-    mac: 38:05:25:35:42:A5
+    # Optional inventory label used only to recognise DHCP leases.
+    # Nothing on the wire uses this value.
+    mac: 02:00:00:00:00:20
 
-# The older single-machine form still loads, so a config written before
-# multiple machines existed keeps working:
+# The older single-machine form still loads:
 #
 # amt:
-#   host: 192.168.99.153
+#   host: 192.0.2.10
 #   port: 16993
 #   username: admin
 #   password: CHANGE_ME

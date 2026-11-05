@@ -2,3 +2,10 @@ target/
 .amt/
 config.yaml
 *.env
+*.pem
+amt-shot-*.png
+.DS_Store
+
+# Local MeshCommander JavaScript extracts used only as protocol references.
+# They are not part of the published Rust project.
+ref/*.js

@@ -23,6 +23,12 @@ do next, not by what is easiest.
 
 ## Next
 
+- [ ] **WS-Man TLS compatibility with ME 16.** On the tested MS-01, KVM works
+      but `amt-cli power` fails during the initial WS-Man TLS handshake with
+      `InternalError`; an independent client succeeds after enabling the legacy
+      TLS behaviour required by that firmware. *Done when* the stock Rust
+      client completes an authenticated power-state read on ME 16 without a
+      separate compatibility wrapper, and the existing MS-02 path still passes.
 - [ ] **Dirty-rectangle updates.** Today every new frame is rescanned and
       rescaled entirely. *Done when* a keystroke repaints only the tiles that
       changed and CPU stays low with the window open for an hour.

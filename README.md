@@ -1,218 +1,269 @@
-# amt-rs — a native Intel AMT client
+# amt-rs — a native Intel AMT/vPro client
 
-Rust implementation of the AMT operations we need on the Minisforum MS-02
-Ultra: power control, KVM with working keyboard and mouse, boot to BIOS setup,
-and a control console beside the window. One static binary, no Node.js
-runtime, no browser.
+`amt-rs` is a Rust client for Intel AMT/vPro: power control, KVM with working
+keyboard and mouse, boot-to-BIOS setup, Serial-over-LAN, and multiple machines
+from one configuration file. It provides one `amt-cli` binary, with no Node.js
+runtime or browser required.
 
-MeshCommander stays the reference implementation - this client was written by
-watching what it puts on the wire - but it needs a Node.js process and its
-console is a browser page. The wire protocols are documented and small enough
-to own.
+The project was originally developed against a Minisforum MS-02 Ultra and now
+lives in its own repository. Hardware validation also includes a Minisforum
+MS-01; support is not tied to a particular Minisforum model.
 
-## State
+MeshCommander remains the protocol reference. This client was written by
+observing and documenting the wire protocols rather than embedding a browser
+or a Node.js process.
 
-**1.2.4** — everything below was exercised against the AMT of this host
-(dedicated management LAN, `192.168.99.153`), not only against the mock.
+## State at 1.2.4
 
-| Part | State |
+| Area | State |
 |---|---|
-| Power: `on` (2), `off` (8), `reset` (10), `power cycle` (5) | **works on hardware**, `ReturnValue` validated (a 2xx is not success) |
-| Power-state query with names | **works** — `PowerState=8 (Off-Soft) RequestedPowerState=8 (Off-Soft)` |
-| Redirection transport + AAAH handshake | **works** — TLS on `16995` (WS-Man port + 2) |
-| KVM video, RAW / RLE / palette-RLE decoders | **works** — 1920x1080 RGB565, text legible, colours correct |
-| KVM window (winit + softbuffer) | **works** — scales to the window with integer factors, follows resolution changes (POST at 1024x768, desktop at 1920x1080), reconnects by itself |
-| Keyboard and mouse | **works** — physical-key mapping, modifiers held so `ctrl+c` and `ctrl+alt+f2` work |
-| Control console in the launching terminal | **works** — `status`, `bios`, `boot-bios`, `on`, `off`, `reset`, `cycle`, `machines`, `use <name>`, `reconnect`, `shot`, `quit`; history with arrows, colours on a TTY |
-| Boot to BIOS setup | **works** — writes `AMT_BootSettingData.BIOSSetup` and activates the boot configuration with `SetBootConfigRole`; the machine came up in setup without touching Delete |
-| SOL | settings exchange and I/O work against the mock; on hardware the device closes after the start request until SOL/IDER is enabled in MEBx |
-| IDER (virtual CD/floppy) | not implemented |
+| Power: `on` (2), `off` (8), `reset` (10), `power cycle` (5) | Works on the MS-02 Ultra, with `ReturnValue` validated |
+| Power-state query with human-readable names | Works on the MS-02 Ultra; see the ME 16 TLS limitation below |
+| Redirection transport and AAAH handshake | Works on MS-02 and MS-01 hardware |
+| KVM video: RAW, RLE, palette-RLE and ZLIB decoders | Works: 1920x1080 RGB565, legible text and correct colours |
+| KVM window, keyboard and mouse | Works: integer scaling, resolution changes and automatic reconnection |
+| Control console in the launching terminal | `status`, `bios`, `boot-bios`, `on`, `off`, `reset`, `cycle`, `machines`, `use`, `reconnect`, `shot`, `quit` |
+| Boot to BIOS setup | Works on the MS-02 Ultra without pressing Delete during POST |
+| Multiple configured machines | Works: global `--machine`, environment selection and `use <name>` inside KVM |
+| SOL | Works against the mock; hardware requires SOL/IDER to be enabled in the firmware |
+| IDER / USB-R | Not implemented |
 
-### What still bites
+### Known compatibility limitation: ME 16 WS-Man TLS
 
-- **One redirection client at a time.** While another KVM (MeshCommander, a
-  stale window) holds the session every connect gets
-  `StartRedirectionSession refused, status 2`.
-- **Power off and power cycle are refused while a client is attached**
-  (`ReturnValue 2`). `off` and `cycle` therefore release the session first,
-  wait for the socket to close, and retry.
-- **`6` is not a valid power state here**: power down is `8`, power cycle is
-  `5`, reset is `10`. Sending 6 earns a `ReturnValue 2` that looks like a
-  session problem and is not.
-- **A frame can be saved from the console** (`shot [file]`), not only with
-  `kvm --screenshot`: the session thread already holds the decoded frame, so
-  the write costs nothing and leaves the session attached. Without a path the
-  PNG lands in `$XDG_PICTURES_DIR/amt/` (`~/Pictures/amt/` normally) as
-  `amt-shot-<epoch>.png`, a place you can find again a week later.
-- **An AMT that is not there is not retried forever**: after three failed
-  connections in a row the session thread stops trying and says so, keeping
-  the window and the console alive; `reconnect` (or `use <name>`) starts it
-  again. Before this, an unreachable device filled the terminal until the
-  run expired.
-- **A power cycle is a hardware action**: the OS gets no ACPI shutdown, so
-  neither dmesg nor journal shows an orderly shutdown. Use `cycle` if the
-  machine must come back on its own, `off` only when you can power it on from
-  somewhere that survives the machine being down.
-- **The firmware encodes every tile containing text with palette RLE**
-  (`subencoding > 129`): `subencoding - 128` RGB565 palette entries, then one
-  index byte per run, where an index above 127 means the run length follows
-  (255 continues). Without that branch text renders as solid blocks.
-- **The device flushes the deflate stream** instead of closing it, so
-  `read_to_end` fails; tiles are always packed as full 64x64 blocks even at the
-  edges.
-- **`AMT_BootSettingData` lives in the Intel namespace**
-  (`intel.com/wbem/wscim/1/amt-schema/1`), is a singleton addressed with no
-  selectors, and a Put needs the whole instance back minus the read-only
-  properties, or the firmware answers `SchemaValidationError`.
-- **On macOS the winit event loop must own the main thread**; the session runs
-  on its own thread with its own tokio runtime.
+On an MS-01 running Intel ME 16, KVM and the redirection TLS 1.2 path were
+verified successfully, but `amt-cli power` currently fails during the initial
+WS-Man TLS handshake with `received fatal alert: InternalError`. An independent
+Digest-authenticated WS-Man request succeeds when the client permits the legacy
+TLS behaviour required by that firmware. Credentials are not the cause.
 
-## Layout
+This is a client compatibility issue, not an AMT provisioning issue. It is
+tracked in [TODO.md](TODO.md); do not describe WS-Man power operations as
+verified on ME 16 until that limitation is fixed and tested on hardware.
 
-```
-amt-rs/
-├── crates/
-│   ├── amt-wsman/   # WS-Man client: SOAP envelope, Digest auth, CIM types
-│   ├── amt-redir/   # AMT redirection protocol (binary, TCP/TLS): handshake, KVM, SOL, IDER
-│   ├── amt-kvm/     # video decoder (RLE8/RLE16/RAW/ZLIB) and input encoder
-│   └── amt-cli/     # the `amt-cli` binary
-└── config.example.yaml
-```
-
-## The envelope that this firmware accepts
-
-This is the part that costs time; everything else is ordinary code. Intel
-AMT's WS-Man validator answers `400 Bad Request` with
-`SchemaValidationError` for anything it does not like, without saying
-which element failed, so an envelope that "looks right" is not enough.
-What works here:
-
-- `https` only, port **16993**. On this firmware 16992 is closed and
-  plain HTTP is not served at all.
-- **No** `<w:OptionSet/>`, **no** `<w:OperationTimeout>`. Adding them
-  (which several public templates do) is rejected.
-- `ManagedElement` must be a complete EPR — `Address` plus
-  `ReferenceParameters` with `ResourceURI` for `CIM_ComputerSystem` and a
-  `SelectorSet` carrying `CreationClassName`/`Name=ManagedSystem`. A bare
-  reference is rejected.
-- The body must be a single line; nothing (not even whitespace or a BOM)
-  before `<?xml`.
-- `Content-Type: application/soap+xml;charset=UTF-8`, Digest auth over TLS,
-  self-signed certificate accepted.
-
-The request that the AMT here accepts for a power state change
-(`PowerState`: 2=on, 8=off-soft, 5=power cycle; the device also reports
-11=reset as available):
-
-```xml
-<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:w="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd"><s:Header><a:Action s:mustUnderstand="true">http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_PowerManagementService/RequestPowerStateChange</a:Action><a:ReplyTo><a:Address>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</a:Address></a:ReplyTo><a:MessageID>uuid:00000000-0000-4000-8000-000000000000</a:MessageID><a:To s:mustUnderstand="true">https://192.168.99.153:16993/wsman</a:To><w:ResourceURI s:mustUnderstand="true">http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_PowerManagementService</w:ResourceURI><w:SelectorSet><w:Selector Name="CreationClassName">CIM_PowerManagementService</w:Selector><w:Selector Name="Name">Intel(r) AMT Power Management Service</w:Selector><w:Selector Name="SystemCreationClassName">CIM_ComputerSystem</w:Selector><w:Selector Name="SystemName">Intel(r) AMT</w:Selector></w:SelectorSet></s:Header><s:Body><p:RequestPowerStateChange_INPUT xmlns:p="http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_PowerManagementService"><p:PowerState>2</p:PowerState><p:ManagedElement xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:w="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd"><a:Address>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</a:Address><a:ReferenceParameters><w:ResourceURI>http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ComputerSystem</w:ResourceURI><w:SelectorSet><w:Selector Name="CreationClassName">CIM_ComputerSystem</w:Selector><w:Selector Name="Name">ManagedSystem</w:Selector></w:SelectorSet></a:ReferenceParameters></p:ManagedElement></p:RequestPowerStateChange_INPUT></s:Body></s:Envelope>
-```
-
-The response is a plain `RequestPowerStateChange_OUTPUT` with
-`<g:ReturnValue>0</g:ReturnValue>` on success — and that value, not the
-HTTP status, is what the client checks.
-
-## Build and run
-
-Step-by-step instructions, including what to look at and what to collect when
-something goes wrong, are in [docs/testing.md](docs/testing.md).
+## Quick start
 
 ```sh
+git clone https://github.com/rimpianto/minisforum.amt-rs.git
+cd minisforum.amt-rs
 cargo build --release
-./target/release/amt-cli power                    # query the current state
-./target/release/amt-cli power --state on
-./target/release/amt-cli sol --seconds 10         # print the console for 10 s
-./target/release/amt-cli sol --interactive        # type to the console
-./target/release/amt-cli kvm --screenshot out.png # decode one full frame
+./target/release/amt-cli --help
 ```
 
-Credentials come from `~/.amt/config.yaml`, where any number of machines can be
-listed, or from `AMT_HOST`, `AMT_PORT`, `AMT_USER`, `AMT_PASS`.
+The executable is `target/release/amt-cli`.
 
-Redirection listens two ports above WS-Man: **16993 → 16995** with TLS
-(16994 is the plain-text variant, used with 16992). Verified on hardware.
-`redirection_port:` in the config overrides that per machine.
+Common commands:
+
+```sh
+./target/release/amt-cli machines
+./target/release/amt-cli --machine primary power
+./target/release/amt-cli --machine primary kvm
+./target/release/amt-cli --machine primary kvm \
+  --seconds 20 --screenshot out.png
+./target/release/amt-cli --machine primary sol --seconds 10
+./target/release/amt-cli --machine primary bios --status
+```
+
+Do not test `off`, `reset` or `cycle` on a machine whose availability matters.
+A bare `power` command only reads the current state; `power --state on` is a
+no-op when the machine is already running.
 
 ## Configuration
 
-`~/.config/amt/config.yaml` (or `$XDG_CONFIG_HOME/amt/config.yaml`), mode
-`0600`, never committed (see `config.example.yaml` and `.gitignore`). The old
-location `~/.amt/config.yaml` is still read, and `AMT_CONFIG=/path/file.yaml`
-overrides both. As many machines as you like, one at a time:
+The default configuration is `~/.config/amt/config.yaml`, or
+`$XDG_CONFIG_HOME/amt/config.yaml` when `XDG_CONFIG_HOME` is set. `AMT_CONFIG`
+can point to another file. The historical `~/.amt/config.yaml` location is
+still accepted.
+
+Keep the real file outside the repository and set mode `0600`. Copy
+[`config.example.yaml`](config.example.yaml) as a starting point:
 
 ```yaml
-default: ms02                 # what a bare command talks to
+default: primary
+
 machines:
-  ms02:
-    host: 192.168.99.153      # AMT of the Minisforum MS-02 Ultra
-    port: 16993               # WS-Man over TLS
+  primary:
+    host: 192.0.2.10             # RFC 5737 documentation address: replace it
+    port: 16993                  # WS-Man over TLS
     username: admin
     password: CHANGE_ME
-  lab:
-    host: 192.168.99.160
+
+  secondary:
+    host: 198.51.100.20          # RFC 5737 documentation address: replace it
     port: 16993
     username: admin
     password: CHANGE_ME
-    redirection_port: 16995   # optional; port + 2 when omitted
+    redirection_port: 16995      # optional; defaults to WS-Man port + 2
+    mac: 02:00:00:00:00:20       # optional inventory label; never sent
 ```
 
-`mac:` is optional and never used on the wire: it is there so `machines`
-output can be matched against a DHCP lease table.
+Select a machine with `--machine`, `AMT_MACHINE`, or the `default:` entry:
 
 ```sh
-./target/release/amt-cli machines             # what is configured, * = default
-./target/release/amt-cli --machine lab power  # one command on another machine
-./target/release/amt-cli --machine lab kvm    # console on another machine
+./target/release/amt-cli machines
+./target/release/amt-cli --machine secondary power
+./target/release/amt-cli --machine secondary kvm
 ```
 
-Inside the KVM console `machines` lists them and `use <name>` reattaches the
-same window to another one, without closing it.
+Inside an interactive KVM session, `machines` lists the configured targets and
+`use <name>` switches the same window to another machine.
 
-The old single-machine form still loads, so an existing config does not break:
+The old single-machine form still loads:
 
 ```yaml
 amt:
-  host: 192.168.99.153
+  host: 192.0.2.10
   port: 16993
   username: admin
   password: CHANGE_ME
 ```
 
-Environment overrides, applied to the machine that was chosen: `AMT_HOST`,
-`AMT_PORT`, `AMT_USER`, `AMT_PASS`, `AMT_REDIR_PORT`, and `AMT_MACHINE` to
-choose the machine. With `AMT_HOST` set and no file at all the tool works as
-before: `AMT_HOST=192.168.99.153 AMT_PASS=... amt-cli power`.
+Environment overrides are applied after machine selection:
 
-## Testing against a live host
+- `AMT_HOST`
+- `AMT_PORT`
+- `AMT_USER`
+- `AMT_PASS`
+- `AMT_REDIR_PORT`
+- `AMT_MACHINE`
 
-`PowerState 2` (on) against an already-running machine is a no-op: that
-is the safe acceptance test, together with the `Get` read that returns
-the current `PowerState`/`RequestedPowerState`. Never test `off`,
-`reset` or power cycle on a machine whose availability matters.
+For example:
 
-A quick independent check of network + credentials + envelope, without
-the Rust client, is a `curl --digest -k` POST of the XML above to
-`https://<host>:16993/wsman`: a `200` with `ReturnValue 0` means
-everything except the client is fine.
+```sh
+AMT_HOST=192.0.2.10 AMT_PASS=CHANGE_ME ./target/release/amt-cli power
+```
 
-`AMT_DEBUG_XML=1` makes the client print the exact SOAP request it sends
-(on stderr). Diffing that against the template above is the fastest way
-to find a broken envelope — a stray backslash or an inserted newline is
-enough to get `SchemaValidationError`.
+## KVM and redirection
 
-## Roadmap
+With TLS, WS-Man normally uses port 16993 and redirection uses **16995**;
+without TLS the pair is 16992 and 16994. Set `redirection_port` or
+`AMT_REDIR_PORT` when a device differs.
 
-The list, with the reason each item matters and what "done" means, is in
-[TODO.md](TODO.md). In short, next is dirty-rectangle updates, then IDER, then
-the clipboard over the KVM data channel.
+Only one redirection client can hold a session. Another `amt-cli` window or a
+MeshCommander session can therefore produce:
 
-Versions up to 1.0.0 followed the commit count (`0.1.<n>`, written into the
-manifest by `scripts/sync-version.sh`). From 1.0.0 the version is a human
-decision.
+```text
+StartRedirectionSession refused, status 2
+```
+
+Close the other session before reconnecting.
+
+If the redirection port times out on every client, check the firmware state,
+not only IP routing:
+
+- `AMT_RedirectionService.ListenerEnabled` must be `true`;
+- `CIM_KVMRedirectionSAP.EnabledState` must report an enabled state;
+- KVM being allowed in MEBx (`EnabledByMEBx=true`) does not by itself prove
+  that the runtime listener is enabled.
+
+An unreachable AMT is retried three times before the session pauses. Use
+`reconnect` at the `amt-rs` prompt, or `use <name>` to select another target.
+
+## Interactive controls
+
+The terminal that launches KVM remains a control console:
+
+```text
+status | bios | bios status | bios cancel | boot-bios
+on | off | reset | cycle
+machines | use <name> | reconnect
+shot [file]
+quit
+```
+
+`shot` writes the current framebuffer without opening a second AMT session.
+Without an explicit path it saves `amt-shot-<epoch>.png` under
+`$XDG_PICTURES_DIR/amt/`, normally `~/Pictures/amt/`.
+
+`off` and `cycle` release the redirection session first because the firmware
+refuses those actions while a client is attached. A reset keeps the session
+usable and lets the window reconnect for POST or setup.
+
+## Repository layout
+
+```text
+.
+├── crates/
+│   ├── amt-wsman/   # WS-Man: SOAP envelopes, Digest authentication, CIM
+│   ├── amt-redir/   # AMT redirection: TCP/TLS, AAAH, KVM and SOL transport
+│   ├── amt-kvm/     # RFB video decoders and keyboard/mouse input
+│   └── amt-cli/     # The amt-cli executable and interactive console
+├── docs/
+│   └── testing.md   # Hardware validation and evidence collection
+├── ref/
+│   └── kvm-protocol.md
+├── tests/
+├── config.example.yaml
+├── Cargo.toml
+├── LICENSE
+└── TODO.md
+```
+
+## WS-Man details that still matter
+
+Intel AMT can reject an envelope that merely looks valid, often with HTTP 400
+and `SchemaValidationError` rather than a useful field-level diagnostic.
+
+The power envelope validated on the original firmware has these properties:
+
+- HTTPS on port 16993 and HTTP Digest authentication;
+- no `<w:OptionSet/>` and no `<w:OperationTimeout>`;
+- a one-line XML body, with nothing before `<?xml`;
+- `Content-Type: application/soap+xml;charset=UTF-8`;
+- a complete `ManagedElement` EPR containing `Address` and
+  `ReferenceParameters`;
+- `ResourceURI` for `CIM_ComputerSystem` and selectors
+  `CreationClassName=CIM_ComputerSystem` and `Name=ManagedSystem`;
+- a fresh `MessageID` and the CIM method URI, not the generic WS-Man method
+  namespace.
+
+The `<a:To>` value in a local configuration must contain the real AMT address.
+A documentation-only example is:
+
+```text
+https://192.0.2.10:16993/wsman
+```
+
+For a power action, HTTP success is not enough: the response must contain
+`<ReturnValue>0</ReturnValue>`.
+
+`AMT_BootSettingData` is in the Intel namespace
+(`intel.com/wbem/wscim/1/amt-schema/1`), is a singleton addressed without
+selectors, and requires a complete writable instance on Put. Requesting
+`BIOSSetup=true` also requires `CIM_BootService.SetBootConfigRole` for the next
+boot to consume the setting.
+
+## Testing and evidence
+
+See [docs/testing.md](docs/testing.md) for build, configuration, safe hardware
+checks, KVM evidence collection and power-safety rules.
+
+Useful decoder diagnostics:
+
+```sh
+AMT_DUMP=/tmp/tiles ./target/release/amt-cli kvm \
+  --seconds 10 --screenshot /tmp/screen.png
+./target/release/amt-cli replay /tmp/tiles --out /tmp/replay.png
+```
+
+`AMT_DEBUG_XML=1` prints the exact SOAP request for comparison with a known
+working envelope. Be aware that debug output and captured frames are local
+operational artefacts, not files to commit indiscriminately.
+
+## Roadmap and versioning
+
+The remaining work and acceptance criteria are in [TODO.md](TODO.md). Near-term
+items include ME 16 WS-Man TLS compatibility, dirty-rectangle rendering, IDER,
+and clipboard support.
+
+Versions through 1.0.0 followed the commit count. Starting with 1.0.0, version
+numbers are assigned deliberately. Release state is recorded with annotated
+tags; the migration to this standalone repository preserves the v1.0.0 through
+v1.2.4 tags and the `amt-rs/` project history.
 
 ## License
 
-GPL-3.0, like the parent repository. MeshCommander (Apache-2.0) is used
-as a protocol reference only; no code from it has been copied into this
-tree. Anything ported from it later must be marked as such and carries
-its Apache-2.0 terms.
+GPL-3.0. See [LICENSE](LICENSE).
+
+MeshCommander (Apache-2.0) is used as a protocol reference. Any code ported
+from it in the future must retain the corresponding attribution and Apache-2.0
+terms.
