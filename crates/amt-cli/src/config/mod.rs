@@ -311,6 +311,7 @@ mod tests {
     use crate::config::test_support::{EnvGuard, ENV_LOCK};
 
     #[test]
+    #[cfg(windows)]
     fn windows_default_candidates_use_appdata_then_legacy_userprofile() {
         let _lock = ENV_LOCK.lock();
         let _env = EnvGuard::new(&[
@@ -339,6 +340,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn explicit_and_xdg_config_still_take_precedence_over_the_windows_default() {
         let _lock = ENV_LOCK.lock();
         let _env = EnvGuard::new(&[
@@ -362,6 +364,69 @@ mod tests {
             cands[2],
             home.join("AppData").join("Roaming").join("amt/config.yaml"),
             "AMT_CONFIG and XDG_CONFIG_HOME must outrank the Windows default"
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn unix_default_candidates_use_home_config_then_legacy_home() {
+        let _lock = ENV_LOCK.lock();
+        let _env = EnvGuard::new(&[
+            "AMT_CONFIG",
+            "XDG_CONFIG_HOME",
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+        ]);
+        let home = std::env::temp_dir().join(format!("amt-test-{}", std::process::id()));
+        std::env::set_var("HOME", &home);
+
+        let cands = candidates();
+
+        assert_eq!(
+            cands[0],
+            home.join(".config/amt/config.yaml"),
+            "the Unix default config location must be $HOME/.config/amt/config.yaml"
+        );
+        assert_eq!(
+            cands[1],
+            home.join(".amt/config.yaml"),
+            "the legacy location must resolve from HOME"
+        );
+        assert_eq!(cands.len(), 2, "no Windows-only candidates are expected on Unix");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn explicit_and_xdg_config_still_take_precedence_over_the_unix_default() {
+        let _lock = ENV_LOCK.lock();
+        let _env = EnvGuard::new(&[
+            "AMT_CONFIG",
+            "XDG_CONFIG_HOME",
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+        ]);
+        let home = std::env::temp_dir().join(format!("amt-test-{}", std::process::id()));
+        std::env::set_var("HOME", &home);
+        std::env::set_var("APPDATA", home.join("AppData").join("Roaming"));
+        std::env::set_var("AMT_CONFIG", home.join("explicit.yaml"));
+        std::env::set_var("XDG_CONFIG_HOME", home.join("xdg"));
+
+        let cands = candidates();
+
+        assert_eq!(cands[0], home.join("explicit.yaml"));
+        assert_eq!(cands[1], home.join("xdg").join("amt/config.yaml"));
+        assert_eq!(
+            cands[2],
+            home.join(".config/amt/config.yaml"),
+            "AMT_CONFIG and XDG_CONFIG_HOME must outrank the Unix default"
+        );
+        assert!(
+            !cands
+                .iter()
+                .any(|p| p.to_string_lossy().contains("AppData")),
+            "the Windows APPDATA default must never appear in the Unix search order"
         );
     }
 }

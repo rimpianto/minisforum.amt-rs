@@ -1577,6 +1577,7 @@ mod tests {
     use crate::config::test_support::EnvGuard;
 
     #[test]
+    #[cfg(windows)]
     fn default_shot_path_uses_userprofile_pictures_on_windows() {
         let _lock = crate::config::test_support::ENV_LOCK.lock();
         let _env = EnvGuard::new(&["XDG_PICTURES_DIR", "HOME", "USERPROFILE"]);
@@ -1615,6 +1616,31 @@ mod tests {
             path.parent().map(|p| p.to_path_buf()),
             Some(pictures.join("amt")),
             "XDG_PICTURES_DIR must override the Windows default"
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn default_shot_path_uses_home_pictures_on_unix() {
+        let _lock = crate::config::test_support::ENV_LOCK.lock();
+        let _env = EnvGuard::new(&["XDG_PICTURES_DIR", "HOME", "USERPROFILE"]);
+        let home = std::env::temp_dir().join(format!("amt-shot-{}", std::process::id()));
+        std::env::set_var("HOME", &home);
+
+        let path = super::default_shot_path();
+
+        assert_eq!(
+            path.parent().map(|p| p.to_path_buf()),
+            Some(home.join("Pictures").join("amt")),
+            "on Unix the default screenshot directory must be $HOME/Pictures/amt"
+        );
+        assert!(
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("amt-shot-") && n.ends_with(".png"))
+                .unwrap_or(false),
+            "the default screenshot file must be named amt-shot-<epoch>.png, got {:?}",
+            path.file_name()
         );
     }
 }
