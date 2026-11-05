@@ -1,11 +1,23 @@
 # Getting started with amt-cli
 
-This guide walks through a first build, a minimal configuration, the expected
-output of the main commands, and the interactive KVM console. It also explains
-why a KVM window launched with no options closes after a few seconds.
+This guide walks through a first run — building it yourself or using a
+prebuilt binary — a minimal configuration, the expected output of the main
+commands, and the interactive KVM console. It also explains why a KVM window
+launched with no options closes after a few seconds.
 
 The example addresses and credentials are placeholders. Replace them with the
 values for your own AMT device.
+
+## Which path are you on?
+
+- **User** — you just want to run amt-cli: skip section 1 and download the
+  prebuilt binary from the
+  [Releases page](https://github.com/rimpianto/minisforum.amt-rs/releases)
+  instead. Unpack the ZIP, put `amt-cli` (or `amt-cli.exe` on Windows)
+  somewhere on your PATH, and continue from
+  [section 2](#2-create-a-local-configuration).
+- **Developer** — you want to read or change the code: start at
+  [section 1](#1-build-the-executable) and keep reading.
 
 ## 1. Build the executable
 
