@@ -200,19 +200,24 @@ Without an explicit path it saves `amt-shot-<epoch>.png` under
 `$XDG_PICTURES_DIR/amt/`, normally `~/Pictures/amt/` (`%USERPROFILE%\Pictures\amt\`
 on Windows).
 
-Inside the KVM window the picture can be zoomed without touching the host:
+Inside the KVM window the picture can be zoomed and panned without touching
+the host:
 
 ```text
-ctrl+mouse wheel   zoom the local view in and out
-ctrl+plus / ctrl+minus   same, from the keyboard (plus on the numpad works too)
-ctrl+0             back to the plain fit-to-window picture
+ctrl+mouse wheel   step along the zoom ladder: fit, then 1:1, 2:1, 3:1, 4:1, 6:1
+ctrl+plus / ctrl+minus   same, from the keyboard (numpad keys work too)
+ctrl+left-drag     pan the zoomed picture around
+ctrl+0             back to the plain fit-to-window picture, centred
 ```
 
-Zoom multiplies the fit-to-window scale around a centred picture: above 1.0
-the frame overflows and is cropped, below 1.0 it shrinks inside black bars.
-The pointer is mapped through the zoomed rectangle, so clicks stay where they
-land at any zoom. The shortcuts are matched on physical keys, so they work the
-same on every keyboard layout, on Windows and macOS alike.
+Zoom steps past the fit are INTEGER multiples of the framebuffer pixel, so
+nearest-neighbour text stays crisp at every step — fractional scales shred
+thin console fonts, which is exactly what a 1080p text console needs to stay
+readable. While zoomed in, ctrl+left-drag pans; the drag is intercepted
+locally and never reaches the host, and the pointer is mapped through the
+zoomed/panned rectangle, so clicks stay where they land. The shortcuts are
+matched on physical keys, so they work the same on every keyboard layout, on
+Windows and macOS alike.
 
 `off` and `cycle` release the redirection session first because the firmware
 refuses those actions while a client is attached. A reset keeps the session
