@@ -26,6 +26,7 @@ or a Node.js process.
 | Boot to BIOS setup | Works on the MS-02 Ultra without pressing Delete during POST |
 | Multiple configured machines | Works: global `--machine`, environment selection and `use <name>` inside KVM |
 | SOL | Works against the mock; hardware requires SOL/IDER to be enabled in the firmware |
+| Native Windows 11 AMD64 build | Builds with the MSVC toolchain; config, history and screenshots use Windows paths. KVM video and window verified on MS-02; mouse, resize and DPI still to verify — see [docs/windows-amd64.md](docs/windows-amd64.md) |
 | IDER / USB-R | Not implemented |
 
 ### Known compatibility limitation: ME 16 WS-Man TLS
@@ -213,6 +214,7 @@ usable and lets the window reconnect for POST or setup.
 │   └── amt-cli/     # The amt-cli executable and interactive console
 ├── docs/
 │   ├── getting-started.md  # First run, expected output, timeout and glossary
+│   ├── windows-amd64.md    # Native Windows 11 AMD64 build and verification state
 │   └── testing.md          # Hardware validation and evidence collection
 ├── ref/
 │   └── kvm-protocol.md
