@@ -197,7 +197,22 @@ quit
 
 `shot` writes the current framebuffer without opening a second AMT session.
 Without an explicit path it saves `amt-shot-<epoch>.png` under
-`$XDG_PICTURES_DIR/amt/`, normally `~/Pictures/amt/`.
+`$XDG_PICTURES_DIR/amt/`, normally `~/Pictures/amt/` (`%USERPROFILE%\Pictures\amt\`
+on Windows).
+
+Inside the KVM window the picture can be zoomed without touching the host:
+
+```text
+ctrl+mouse wheel   zoom the local view in and out
+ctrl+plus / ctrl+minus   same, from the keyboard (plus on the numpad works too)
+ctrl+0             back to the plain fit-to-window picture
+```
+
+Zoom multiplies the fit-to-window scale around a centred picture: above 1.0
+the frame overflows and is cropped, below 1.0 it shrinks inside black bars.
+The pointer is mapped through the zoomed rectangle, so clicks stay where they
+land at any zoom. The shortcuts are matched on physical keys, so they work the
+same on every keyboard layout, on Windows and macOS alike.
 
 `off` and `cycle` release the redirection session first because the firmware
 refuses those actions while a client is attached. A reset keeps the session
