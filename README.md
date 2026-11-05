@@ -13,7 +13,7 @@ MeshCommander remains the protocol reference. This client was written by
 observing and documenting the wire protocols rather than embedding a browser
 or a Node.js process.
 
-## State at 1.2.4
+## State at 1.3.0
 
 | Area | State |
 |---|---|
@@ -22,6 +22,7 @@ or a Node.js process.
 | Redirection transport and AAAH handshake | Works on MS-02 and MS-01 hardware |
 | KVM video: RAW, RLE, palette-RLE and ZLIB decoders | Works: 1920x1080 RGB565, legible text and correct colours |
 | KVM window, keyboard and mouse | Works: integer scaling, resolution changes and automatic reconnection |
+| Manual KVM zoom and pan | Works on macOS with ctrl+wheel, ctrl+plus/minus/0 and ctrl+left-drag; Windows build contains the same logic, with physical-input verification still pending |
 | Control console in the launching terminal | `status`, `bios`, `boot-bios`, `on`, `off`, `reset`, `cycle`, `machines`, `use`, `reconnect`, `shot`, `quit` |
 | Boot to BIOS setup | Works on the MS-02 Ultra without pressing Delete during POST |
 | Multiple configured machines | Works: global `--machine`, environment selection and `use <name>` inside KVM |
