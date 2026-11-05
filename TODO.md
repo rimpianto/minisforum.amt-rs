@@ -49,6 +49,10 @@ do next, not by what is easiest.
 ## Afterwards
 
 - [ ] Windows and ARM64 builds, with the same binary layout as macOS.
+      Windows 11 AMD64: native MSVC build done, Windows paths for config,
+      history and screenshots done, KVM video/window/keyboard verified on
+      MS-02 (see docs/windows-amd64.md). Still open: mouse pointer delivery,
+      window resize/DPI and modifier release on focus loss; ARM64 not started.
 - [ ] Release packaging: prebuilt binaries on tags, plus a one-line installer.
 - [ ] Decoder tests from recorded dumps: `AMT_DUMP` already saves tiles, the
       missing part is turning a few of them into fixtures with expected PNGs.

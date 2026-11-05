@@ -21,6 +21,12 @@ The executable is:
 target/release/amt-cli
 ```
 
+On Windows the same commands work in PowerShell with the MSVC toolchain; the
+executable lands in `target\x86_64-pc-windows-msvc\release\amt-cli.exe` and
+configuration, history and screenshots use Windows paths. See
+[windows-amd64.md](windows-amd64.md) for the full procedure and the list of
+what has been verified on Windows so far.
+
 Check the available commands:
 
 ```sh
