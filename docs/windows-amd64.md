@@ -130,6 +130,11 @@ Not yet verified on Windows, listed explicitly:
   available during the test session);
 - **window resize / DPI scaling** interaction with the live KVM view;
 - **modifier release on focus loss**;
+- **manual zoom with real input** (ctrl+wheel / ctrl+plus / ctrl+minus): the
+  logic is unit-tested and compiled into this build, but the automated input
+  synthesis could not deliver the chord with usable scancodes, so a physical
+  pass is still pending; **macOS behaviour is completely unverified** from
+  this Windows machine;
 - typed-character delivery through synthetic (PostMessage-style) input was
   intermittent in automated testing; physical keyboard input has not shown
   this, but a human-in-the-loop pass over keyboard and mouse is still worth

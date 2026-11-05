@@ -127,6 +127,10 @@ pub fn run_gui(gui: Gui) -> Result<()> {
     let mut held_mods: Vec<u32> = Vec::new();
     let mut fb_dims = (0usize, 0usize);
     let mut mask = 0u8;
+    // Manual zoom: 1.0 is the fit-to-window picture; ctrl+wheel or
+    // ctrl+plus/minus moves it, ctrl+0 resets. The zoom multiplies the fit
+    // scale, cropping (or letterboxing) around a centred picture.
+    let mut zoom = 1.0f32;
 
     event_loop.run(move |event, elwt| {
         // Poll the frame channel ~60 times a second. Without this the redraw
@@ -215,6 +219,40 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                             let _ = gui.input.send(Input::Modifier { keysym: k, down });
                         }
                     } else if event.state == ElementState::Pressed {
+                        // With ctrl held, plus/minus/zero zoom the local
+                        // picture instead of reaching the host console.
+                        // Matched on PHYSICAL keys: logical characters are
+                        // layout-dependent (on an Italian layout VK_OEM_MINUS
+                        // types "'", on others '-'), while the physical key
+                        // is the same key everywhere — this is what makes the
+                        // shortcut work the same on Windows and macOS.
+                        if held_mods.contains(&0xFFE3) {
+                            use winit::keyboard::{KeyCode, PhysicalKey};
+                            let zoomed = match event.physical_key {
+                                PhysicalKey::Code(KeyCode::Equal)
+                                | PhysicalKey::Code(KeyCode::NumpadAdd) => {
+                                    Some(zoom_step(zoom, true))
+                                }
+                                PhysicalKey::Code(KeyCode::Minus)
+                                | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
+                                    Some(zoom_step(zoom, false))
+                                }
+                                PhysicalKey::Code(KeyCode::Digit0)
+                                | PhysicalKey::Code(KeyCode::Numpad0) => Some(1.0),
+                                _ => None,
+                            };
+                            if let Some(z) = zoomed {
+                                zoom = z;
+                                force_draw = true;
+                                if std::env::var("AMT_TRACE").is_ok() {
+                                    eprintln!("[gui] zoom -> {z}");
+                                }
+                                if let Some(win) = window.as_ref() {
+                                    win.request_redraw();
+                                }
+                                return;
+                            }
+                        }
                         if let Some(k) = key_to_keysym(&event.physical_key, &event.logical_key) {
                             let _ = gui.input.send(Input::Key { keysym: k });
                         }
@@ -232,8 +270,19 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                         let st = gui.state.lock().unwrap();
                         (st.0.max(1), st.1.max(1))
                     };
-                    pos.0 = (position.x / fw as f64 * 65535.0).clamp(0.0, 65535.0) as u16;
-                    pos.1 = (position.y / fh as f64 * 65535.0).clamp(0.0, 65535.0) as u16;
+                    // Map through the rectangle the frame is actually drawn
+                    // in, so the pointer stays honest at any zoom.
+                    let (hx, hy) = pointer_to_host(
+                        position.x,
+                        position.y,
+                        win_w,
+                        win_h,
+                        fw,
+                        fh,
+                        zoom,
+                    );
+                    pos.0 = hx;
+                    pos.1 = hy;
                     let _ = gui.input.send(Input::Pointer {
                         x: pos.0,
                         y: pos.1,
@@ -241,11 +290,21 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                     });
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    // RFB has no wheel: buttons 4 and 5 are one click each.
                     let up = match delta {
                         winit::event::MouseScrollDelta::LineDelta(_, y) => y > 0.0,
                         winit::event::MouseScrollDelta::PixelDelta(p) => p.y > 0.0,
                     };
+                    // ctrl+wheel zooms the local picture instead of scrolling
+                    // the remote console.
+                    if held_mods.contains(&0xFFE3) {
+                        zoom = zoom_step(zoom, up);
+                        force_draw = true;
+                        if let Some(win) = window.as_ref() {
+                            win.request_redraw();
+                        }
+                        return;
+                    }
+                    // RFB has no wheel: buttons 4 and 5 are one click each.
                     let bit = if up { 8u8 } else { 16u8 };
                     for buttons in [mask | bit, mask] {
                         let _ = gui.input.send(Input::Pointer {
@@ -331,28 +390,38 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                         let buf_h = NonZeroU32::new(win_h.max(1)).unwrap_or(NonZeroU32::new(1).unwrap());
                         if surf.resize(buf_w, buf_h).is_ok() {
                             if let Ok(mut buf) = surf.buffer_mut() {
-                                // Scale the framebuffer to the window with the
-                                // aspect ratio kept, black bars around it.
+                                // Scale the framebuffer by the zoom around the
+                                // plain fit, keep the aspect ratio, centre the
+                                // picture; overflow is cropped, slack shows as
+                                // black bars.
                                 let (fw, fh) = (frame.width.max(1), frame.height.max(1));
-                                let (bw, bh) = (buf_w.get() as usize, buf_h.get() as usize);
-                                let scale = (bw as f32 / fw as f32).min(bh as f32 / fh as f32);
-                                let dw = ((fw as f32 * scale) as usize).clamp(1, bw);
-                                let dh = ((fh as f32 * scale) as usize).clamp(1, bh);
-                                let ox = (bw - dw) / 2;
-                                let oy = (bh - dh) / 2;
+                                let (bw, bh) = (buf_w.get() as i64, buf_h.get() as i64);
+                                let (dw, dh, g_ox, g_oy) =
+                                    draw_geometry(buf_w.get(), buf_h.get(), fw, fh, zoom);
+                                let (dw, dh) = (dw as i64, dh as i64);
+                                let (g_ox, g_oy) = (g_ox as i64, g_oy as i64);
 
                                 let black = 0u32;
                                 for px in buf.iter_mut() {
                                     *px = black;
                                 }
-                                for y in 0..dh {
-                                    let sy = y * fh / dh;
+                                // Only the visible part of the (possibly
+                                // cropped) picture is drawn: window rows and
+                                // columns that fall inside the frame rect.
+                                // Signed offsets: zoomed past the window, the
+                                // frame rect starts before (0, 0).
+                                let y0 = g_oy.max(0);
+                                let y1 = (g_oy + dh).min(bh).max(0);
+                                let x0 = g_ox.max(0);
+                                let x1 = (g_ox + dw).min(bw).max(0);
+                                for by in y0..y1 {
+                                    let sy = ((by - g_oy) * fh as i64 / dh) as usize;
                                     let row = sy * fw * 4;
-                                    let out_row = (oy + y) * bw + ox;
-                                    for x in 0..dw {
-                                        let sx = x * fw / dw;
+                                    let out_row = by as usize * bw as usize;
+                                    for bx in x0..x1 {
+                                        let sx = ((bx - g_ox) * fw as i64 / dw) as usize;
                                         let p = &frame.pixels[row + sx * 4..row + sx * 4 + 4];
-                                        buf[out_row + x] = ((p[0] as u32) << 16)
+                                        buf[out_row + bx as usize] = ((p[0] as u32) << 16)
                                             | ((p[1] as u32) << 8)
                                             | p[2] as u32;
                                     }
@@ -418,4 +487,153 @@ pub fn channels() -> (Sender<Frame>, Receiver<Input>, Gui) {
             state: Arc::new(Mutex::new((1920, 1080))),
         },
     )
+}
+
+/// Where the frame lands inside the window at the given zoom, keeping the
+/// aspect ratio: `(draw_w, draw_h, off_x, off_y)` in window pixels. The
+/// offsets are negative when the zoomed frame overflows the window (the
+/// overflow is cropped, centered).
+///
+/// `zoom == 1.0` is the plain fit-to-window picture that amt-rs has always
+/// shown; larger values blow it up past the window, smaller ones shrink it
+/// inside black bars.
+fn draw_geometry(buf_w: u32, buf_h: u32, fw: usize, fh: usize, zoom: f32) -> (u32, u32, i32, i32) {
+    let (fw, fh) = (fw.max(1), fh.max(1));
+    let fit = (buf_w as f32 / fw as f32).min(buf_h as f32 / fh as f32);
+    let scale = (fit * zoom.max(0.01)).max(0.001);
+    let dw = ((fw as f32 * scale) as u32).clamp(1, u32::MAX);
+    let dh = ((fh as f32 * scale) as u32).clamp(1, u32::MAX);
+    let ox = (buf_w as i32 - dw as i32) / 2;
+    let oy = (buf_h as i32 - dh as i32) / 2;
+    (dw, dh, ox, oy)
+}
+
+/// One wheel/keypress step of manual zoom.
+fn zoom_step(current: f32, up: bool) -> f32 {
+    const MIN: f32 = 0.25;
+    const MAX: f32 = 5.0;
+    const STEP: f32 = 1.25;
+    let next = if up {
+        current * STEP
+    } else {
+        current / STEP
+    };
+    next.clamp(MIN, MAX)
+}
+
+/// Map a position in window pixels to absolute RFB pointer coordinates
+/// (0..=65535 on both axes) through the rectangle the frame is drawn in.
+/// Points in the black bars clamp to the nearest frame edge instead of
+/// teleporting the host cursor across the screen.
+fn pointer_to_host(
+    x: f64,
+    y: f64,
+    buf_w: u32,
+    buf_h: u32,
+    fw: usize,
+    fh: usize,
+    zoom: f32,
+) -> (u16, u16) {
+    let (_dw, _dh, ox, oy) = draw_geometry(buf_w, buf_h, fw, fh, zoom);
+    let (fw, fh) = (fw.max(1) as f64, fh.max(1) as f64);
+    // Recompute the float scale the same way draw_geometry does.
+    let fit = (buf_w as f32 / fw as f32).min(buf_h as f32 / fh as f32);
+    let scale = (fit * zoom.max(0.01)) as f64;
+    let fx = ((x - ox as f64) / scale).clamp(0.0, fw);
+    let fy = ((y - oy as f64) / scale).clamp(0.0, fh);
+    (
+        (fx / fw * 65535.0) as u16,
+        (fy / fh * 65535.0) as u16,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_step_grows_and_clamps_at_the_top() {
+        let z = zoom_step(1.0, true);
+        assert!((z - 1.25).abs() < 1e-6);
+        let maxed = zoom_step(5.0, true);
+        assert!((maxed - 5.0).abs() < 1e-6, "zoom must clamp at 5.0");
+    }
+
+    #[test]
+    fn zoom_step_shrinks_and_clamps_at_the_bottom() {
+        let z = zoom_step(1.0, false);
+        assert!((z - 0.8).abs() < 1e-6);
+        let mined = zoom_step(0.25, false);
+        assert!((mined - 0.25).abs() < 1e-6, "zoom must clamp at 0.25");
+    }
+
+    #[test]
+    fn draw_geometry_at_zoom_one_fits_the_window_exactly() {
+        // Window is half the frame in both axes: exact fit, no offset.
+        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 2000, 1000, 1.0);
+        assert_eq!((dw, dh, ox, oy), (1000, 500, 0, 0));
+    }
+
+    #[test]
+    fn draw_geometry_letterboxes_at_zoom_one_when_ratios_differ() {
+        // Frame twice as wide as tall, window square: fit on height, black
+        // bars left and right.
+        let (dw, dh, ox, oy) = draw_geometry(1000, 1000, 2000, 1000, 1.0);
+        assert_eq!((dw, dh, ox, oy), (1000, 500, 0, 250));
+    }
+
+    #[test]
+    fn draw_geometry_zoomed_past_the_window_crops_centered() {
+        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 1000, 500, 2.0);
+        assert_eq!((dw, dh), (2000, 1000));
+        assert_eq!((ox, oy), (-500, -250));
+    }
+
+    #[test]
+    fn draw_geometry_zoomed_below_one_shrinks_inside_black_bars() {
+        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 1000, 500, 0.5);
+        assert_eq!((dw, dh), (500, 250));
+        assert_eq!((ox, oy), (250, 125));
+    }
+
+    #[test]
+    fn pointer_maps_through_the_zoom_geometry() {
+        // Exact fit at 0.5x: the frame fills the window, so the window centre
+        // (500, 250) is the frame centre, and (250, 125) is a quarter of the
+        // way across.
+        let (hx, hy) = pointer_to_host(500.0, 250.0, 1000, 500, 2000, 1000, 1.0);
+        assert!(
+            (hx as i32 - 32767).abs() <= 1 && (hy as i32 - 32767).abs() <= 1,
+            "got ({hx}, {hy})"
+        );
+        let (hx, hy) = pointer_to_host(250.0, 125.0, 1000, 500, 2000, 1000, 1.0);
+        assert!(
+            (hx as i32 - 16383).abs() <= 1 && (hy as i32 - 16383).abs() <= 1,
+            "got ({hx}, {hy})"
+        );
+    }
+
+    #[test]
+    fn pointer_clamps_inside_the_black_bars() {
+        // Letterboxed: frame spans the full width, black bars top and bottom.
+        // Window (100, 100) is above the picture: x is a tenth of the way in,
+        // y clamps to the top edge.
+        let (hx, hy) = pointer_to_host(100.0, 100.0, 1000, 1000, 2000, 1000, 1.0);
+        assert!((hx as i32 - 6553).abs() <= 1, "got ({hx}, {hy})");
+        assert_eq!(hy, 0);
+
+        // Zoomed in 2x the window shows the central half of the frame, so the
+        // window centre is still the frame centre and the window top-left
+        // corner is a quarter of the way into the frame, not its edge.
+        let (hx, hy) = pointer_to_host(500.0, 250.0, 1000, 500, 1000, 500, 2.0);
+        assert!(
+            (hx as i32 - 32767).abs() <= 1 && (hy as i32 - 32767).abs() <= 1,
+            "got ({hx}, {hy})"
+        );
+        let (hx, hy) = pointer_to_host(0.0, 0.0, 1000, 500, 1000, 500, 2.0);
+        assert!(
+            (hx as i32 - 16383).abs() <= 1 && (hy as i32 - 16383).abs() <= 1,
+            "got ({hx}, {hy})"
+        );
+    }
 }
