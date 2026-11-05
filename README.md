@@ -13,6 +13,30 @@ MeshCommander remains the protocol reference. This client was written by
 observing and documenting the wire protocols rather than embedding a browser
 or a Node.js process.
 
+## Two ways to get amt-cli
+
+**You just want to use it (recommended for most people)** — download a
+prebuilt binary from the
+[Releases page](https://github.com/rimpianto/minisforum.amt-rs/releases):
+grab the ZIP for your platform, unpack it, and run `amt-cli`. No Rust
+toolchain, no compiler, nothing to install. Then follow
+[Getting started](docs/getting-started.md) from the configuration section
+onwards.
+
+**You want to read or change the code** — clone the repository and build it
+yourself:
+
+```sh
+git clone https://github.com/rimpianto/minisforum.amt-rs.git
+cd minisforum.amt-rs
+cargo build --release
+```
+
+Everything a developer needs — build prerequisites for Windows/macOS/Linux,
+test commands, hardware verification recipes — lives in
+[docs/getting-started.md](docs/getting-started.md) and
+[docs/testing.md](docs/testing.md).
+
 ## State at 1.3.0
 
 | Area | State |
