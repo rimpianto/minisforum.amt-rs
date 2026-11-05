@@ -67,6 +67,30 @@ Do not test `off`, `reset` or `cycle` on a machine whose availability matters.
 A bare `power` command only reads the current state; `power --state on` is a
 no-op when the machine is already running.
 
+For a guided first run, including expected output, the default five-second KVM
+timeout, interactive commands and troubleshooting, read
+[**Getting started with amt-cli**](docs/getting-started.md).
+
+## Glossary
+
+- **ME (Intel Management Engine)**: firmware subsystem integrated into the
+  chipset. It remains available when the operating system is off, provided the
+  machine still has power, and supplies the platform's manageability functions.
+- **AMT (Intel Active Management Technology)**: the Intel vPro feature set
+  exposed by the ME, including remote power control, WS-Man, KVM, SOL and IDER.
+- **MEBx (Intel Management Engine BIOS Extension)**: firmware menu used to
+  configure ME and AMT, normally opened during POST with Ctrl+P.
+- **WS-Man (Web Services for Management)**: SOAP-based management protocol. On
+  the documented AMT setups it is reached over HTTPS on TCP port 16993 and uses
+  Digest authentication.
+- **MEI (Management Engine Interface)**: Linux interface to the ME. A working
+  `/dev/mei0` device backed by the `mei_me` driver shows that the local Linux
+  communication stack is present.
+- **VFIO**: kernel framework for assigning PCI devices away from their normal
+  host drivers. In the MS-01 setup, `vfio-pci` selectively reserves the
+  I226-LM, preventing `igc` from exposing it as a Linux network interface while
+  the other I226-V remains available to Linux.
+
 ## Configuration
 
 The default configuration is `~/.config/amt/config.yaml`, or
@@ -188,7 +212,8 @@ usable and lets the window reconnect for POST or setup.
 │   ├── amt-kvm/     # RFB video decoders and keyboard/mouse input
 │   └── amt-cli/     # The amt-cli executable and interactive console
 ├── docs/
-│   └── testing.md   # Hardware validation and evidence collection
+│   ├── getting-started.md  # First run, expected output, timeout and glossary
+│   └── testing.md          # Hardware validation and evidence collection
 ├── ref/
 │   └── kvm-protocol.md
 ├── tests/
