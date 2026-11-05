@@ -236,13 +236,24 @@ fn default_shot_path() -> std::path::PathBuf {
         .unwrap_or(0);
     let base = std::env::var_os("XDG_PICTURES_DIR")
         .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Pictures"))
-        })
+        .or_else(pictures_home)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = base.join("amt");
     let _ = std::fs::create_dir_all(&dir);
     dir.join(format!("amt-shot-{stamp}.png"))
+}
+
+/// The Pictures directory of the user profile: `HOME` on Unix,
+/// `USERPROFILE` on Windows (where `HOME` is normally not set).
+fn pictures_home() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(|h| std::path::PathBuf::from(h).join("Pictures"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Pictures"))
+    }
 }
 
 /// `amt-cli machines`: what is configured, which one a bare command would use,
@@ -1559,4 +1570,51 @@ async fn kvm_capture(
         println!("no frame drawn within {seconds}s");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::test_support::EnvGuard;
+
+    #[test]
+    fn default_shot_path_uses_userprofile_pictures_on_windows() {
+        let _lock = crate::config::test_support::ENV_LOCK.lock();
+        let _env = EnvGuard::new(&["XDG_PICTURES_DIR", "HOME", "USERPROFILE"]);
+        let home = std::env::temp_dir().join(format!("amt-shot-{}", std::process::id()));
+        std::env::set_var("USERPROFILE", &home);
+
+        let path = super::default_shot_path();
+
+        assert_eq!(
+            path.parent().map(|p| p.to_path_buf()),
+            Some(home.join("Pictures").join("amt")),
+            "on Windows the default screenshot directory must be %USERPROFILE%\\Pictures\\amt"
+        );
+        assert!(
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("amt-shot-") && n.ends_with(".png"))
+                .unwrap_or(false),
+            "the default screenshot file must be named amt-shot-<epoch>.png, got {:?}",
+            path.file_name()
+        );
+    }
+
+    #[test]
+    fn xdg_pictures_dir_still_overrides_the_windows_default() {
+        let _lock = crate::config::test_support::ENV_LOCK.lock();
+        let _env = EnvGuard::new(&["XDG_PICTURES_DIR", "HOME", "USERPROFILE"]);
+        let home = std::env::temp_dir().join(format!("amt-shot-{}", std::process::id()));
+        std::env::set_var("USERPROFILE", &home);
+        let pictures = home.join("xdg-pictures");
+        std::env::set_var("XDG_PICTURES_DIR", &pictures);
+
+        let path = super::default_shot_path();
+
+        assert_eq!(
+            path.parent().map(|p| p.to_path_buf()),
+            Some(pictures.join("amt")),
+            "XDG_PICTURES_DIR must override the Windows default"
+        );
+    }
 }
