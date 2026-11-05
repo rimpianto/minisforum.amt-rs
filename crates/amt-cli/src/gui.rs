@@ -127,10 +127,16 @@ pub fn run_gui(gui: Gui) -> Result<()> {
     let mut held_mods: Vec<u32> = Vec::new();
     let mut fb_dims = (0usize, 0usize);
     let mut mask = 0u8;
-    // Manual zoom: 1.0 is the fit-to-window picture; ctrl+wheel or
-    // ctrl+plus/minus moves it, ctrl+0 resets. The zoom multiplies the fit
-    // scale, cropping (or letterboxing) around a centred picture.
-    let mut zoom = 1.0f32;
+    // Manual zoom and pan. zoom_idx walks the ladder (fit, then 1:1, 2:1,
+    // 3:1, 4:1, 6:1); pan is the picture offset in window pixels and only
+    // matters while the picture is bigger than the window. ctrl+wheel or
+    // ctrl+plus/minus change the zoom, ctrl+0 resets both; ctrl+left-drag
+    // pans instead of reaching the host.
+    let mut zoom_idx = 0usize;
+    let mut pan = (0i32, 0i32);
+    let mut cursor = (0f64, 0f64);
+    // While set: (cursor at drag start, pan at drag start).
+    let mut pan_drag: Option<((f64, f64), (i32, i32))> = None;
 
     event_loop.run(move |event, elwt| {
         // Poll the frame channel ~60 times a second. Without this the redraw
@@ -226,26 +232,39 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                         // types "'", on others '-'), while the physical key
                         // is the same key everywhere — this is what makes the
                         // shortcut work the same on Windows and macOS.
+                        use winit::keyboard::{KeyCode, PhysicalKey};
                         if held_mods.contains(&0xFFE3) {
-                            use winit::keyboard::{KeyCode, PhysicalKey};
+                            let (fw, fh) = {
+                                let st = gui.state.lock().unwrap();
+                                (st.0, st.1)
+                            };
+                            let ladder = zoom_ladder(win_w, win_h, fw, fh);
                             let zoomed = match event.physical_key {
                                 PhysicalKey::Code(KeyCode::Equal)
                                 | PhysicalKey::Code(KeyCode::NumpadAdd) => {
-                                    Some(zoom_step(zoom, true))
+                                    zoom_idx = ladder_step(zoom_idx, 1, ladder.len());
+                                    Some(ladder[zoom_idx])
                                 }
                                 PhysicalKey::Code(KeyCode::Minus)
                                 | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
-                                    Some(zoom_step(zoom, false))
+                                    zoom_idx = ladder_step(zoom_idx, -1, ladder.len());
+                                    Some(ladder[zoom_idx])
                                 }
                                 PhysicalKey::Code(KeyCode::Digit0)
-                                | PhysicalKey::Code(KeyCode::Numpad0) => Some(1.0),
+                                | PhysicalKey::Code(KeyCode::Numpad0) => {
+                                    zoom_idx = 0;
+                                    pan = (0, 0);
+                                    Some(ladder[zoom_idx])
+                                }
                                 _ => None,
                             };
-                            if let Some(z) = zoomed {
-                                zoom = z;
+                            if let Some(scale) = zoomed {
                                 force_draw = true;
                                 if std::env::var("AMT_TRACE").is_ok() {
-                                    eprintln!("[gui] zoom -> {z}");
+                                    eprintln!(
+                                        "[gui] zoom {}x{} (idx {}, scale {:.2}, pan {:?})",
+                                        fw, fh, zoom_idx, scale, pan
+                                    );
                                 }
                                 if let Some(win) = window.as_ref() {
                                     win.request_redraw();
@@ -270,17 +289,33 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                         let st = gui.state.lock().unwrap();
                         (st.0.max(1), st.1.max(1))
                     };
+                    cursor = (position.x, position.y);
+                    // ctrl+left-drag pans the zoomed picture instead of
+                    // reaching the host.
+                    if let Some(((sx, sy), (pan_sx, pan_sy))) = pan_drag {
+                        let ladder = zoom_ladder(win_w, win_h, fw, fh);
+                        let scale = ladder[zoom_idx.min(ladder.len() - 1)];
+                        let want = (
+                            pan_sx + (position.x - sx) as i32,
+                            pan_sy + (position.y - sy) as i32,
+                        );
+                        let (_dw, _dh, ox, oy) =
+                            draw_geometry(win_w, win_h, fw, fh, scale, want.0, want.1);
+                        if (ox, oy) != pan {
+                            pan = (ox, oy);
+                            force_draw = true;
+                            if let Some(win) = window.as_ref() {
+                                win.request_redraw();
+                            }
+                        }
+                        return;
+                    }
                     // Map through the rectangle the frame is actually drawn
                     // in, so the pointer stays honest at any zoom.
-                    let (hx, hy) = pointer_to_host(
-                        position.x,
-                        position.y,
-                        win_w,
-                        win_h,
-                        fw,
-                        fh,
-                        zoom,
-                    );
+                    let ladder = zoom_ladder(win_w, win_h, fw, fh);
+                    let scale = ladder[zoom_idx.min(ladder.len() - 1)];
+                    let (hx, hy) =
+                        pointer_to_host(position.x, position.y, win_w, win_h, fw, fh, scale, pan.0, pan.1);
                     pos.0 = hx;
                     pos.1 = hy;
                     let _ = gui.input.send(Input::Pointer {
@@ -297,8 +332,19 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                     // ctrl+wheel zooms the local picture instead of scrolling
                     // the remote console.
                     if held_mods.contains(&0xFFE3) {
-                        zoom = zoom_step(zoom, up);
+                        let (fw, fh) = {
+                            let st = gui.state.lock().unwrap();
+                            (st.0, st.1)
+                        };
+                        let ladder = zoom_ladder(win_w, win_h, fw, fh);
+                        zoom_idx = ladder_step(zoom_idx, if up { 1 } else { -1 }, ladder.len());
                         force_draw = true;
+                        if std::env::var("AMT_TRACE").is_ok() {
+                            eprintln!(
+                                "[gui] zoom idx {} scale {:.2} pan {:?}",
+                                zoom_idx, ladder[zoom_idx], pan
+                            );
+                        }
                         if let Some(win) = window.as_ref() {
                             win.request_redraw();
                         }
@@ -315,6 +361,41 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
+                    // ctrl+left-drag pans; the drag never reaches the host.
+                    if button == MouseButton::Left && held_mods.contains(&0xFFE3) {
+                        match state {
+                            ElementState::Pressed => pan_drag = Some((cursor, pan)),
+                            ElementState::Released => {
+                                pan_drag = None;
+                                // Refresh the host pointer where we stand now.
+                                let (fw, fh) = {
+                                    let st = gui.state.lock().unwrap();
+                                    (st.0.max(1), st.1.max(1))
+                                };
+                                let ladder = zoom_ladder(win_w, win_h, fw, fh);
+                                let scale = ladder[zoom_idx.min(ladder.len() - 1)];
+                                let (hx, hy) = pointer_to_host(
+                                    cursor.0,
+                                    cursor.1,
+                                    win_w,
+                                    win_h,
+                                    fw,
+                                    fh,
+                                    scale,
+                                    pan.0,
+                                    pan.1,
+                                );
+                                pos.0 = hx;
+                                pos.1 = hy;
+                                let _ = gui.input.send(Input::Pointer {
+                                    x: hx,
+                                    y: hy,
+                                    buttons: mask,
+                                });
+                            }
+                        }
+                        return;
+                    }
                     let bit = match button {
                         MouseButton::Left => 1u8,
                         MouseButton::Middle => 2,
@@ -338,8 +419,11 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                         if (frame.width, frame.height) != fb_dims {
                             // POST and the BIOS run at a different resolution:
                             // follow it instead of scaling a small screen up
-                            // into a big window.
+                            // into a big window. The zoom ladder and the pan
+                            // belong to the old picture: drop both.
                             fb_dims = (frame.width, frame.height);
+                            zoom_idx = 0;
+                            pan = (0, 0);
                             if let Some(win) = window.as_ref() {
                                 if let Some(mon) = win.current_monitor() {
                                     let (mw, mh) = (mon.size().width as f64, mon.size().height as f64);
@@ -390,14 +474,16 @@ pub fn run_gui(gui: Gui) -> Result<()> {
                         let buf_h = NonZeroU32::new(win_h.max(1)).unwrap_or(NonZeroU32::new(1).unwrap());
                         if surf.resize(buf_w, buf_h).is_ok() {
                             if let Ok(mut buf) = surf.buffer_mut() {
-                                // Scale the framebuffer by the zoom around the
-                                // plain fit, keep the aspect ratio, centre the
-                                // picture; overflow is cropped, slack shows as
-                                // black bars.
+                                // Draw the framebuffer at the ladder scale
+                                // with the current pan: aspect ratio kept,
+                                // overflow cropped, slack shows as black
+                                // bars.
                                 let (fw, fh) = (frame.width.max(1), frame.height.max(1));
                                 let (bw, bh) = (buf_w.get() as i64, buf_h.get() as i64);
+                                let ladder = zoom_ladder(buf_w.get(), buf_h.get(), fw, fh);
+                                let scale = ladder[zoom_idx.min(ladder.len() - 1)];
                                 let (dw, dh, g_ox, g_oy) =
-                                    draw_geometry(buf_w.get(), buf_h.get(), fw, fh, zoom);
+                                    draw_geometry(buf_w.get(), buf_h.get(), fw, fh, scale, pan.0, pan.1);
                                 let (dw, dh) = (dw as i64, dh as i64);
                                 let (g_ox, g_oy) = (g_ox as i64, g_oy as i64);
 
@@ -489,36 +575,69 @@ pub fn channels() -> (Sender<Frame>, Receiver<Input>, Gui) {
     )
 }
 
-/// Where the frame lands inside the window at the given zoom, keeping the
-/// aspect ratio: `(draw_w, draw_h, off_x, off_y)` in window pixels. The
-/// offsets are negative when the zoomed frame overflows the window (the
-/// overflow is cropped, centered).
-///
-/// `zoom == 1.0` is the plain fit-to-window picture that amt-rs has always
-/// shown; larger values blow it up past the window, smaller ones shrink it
-/// inside black bars.
-fn draw_geometry(buf_w: u32, buf_h: u32, fw: usize, fh: usize, zoom: f32) -> (u32, u32, i32, i32) {
+/// The zoom ladder: the plain fit-to-window scale first, then integer
+/// multiples of the framebuffer pixel. Integer scales keep nearest-neighbour
+/// text crisp at every step — fractional scales shred thin console fonts.
+fn zoom_ladder(buf_w: u32, buf_h: u32, fw: usize, fh: usize) -> Vec<f32> {
     let (fw, fh) = (fw.max(1), fh.max(1));
     let fit = (buf_w as f32 / fw as f32).min(buf_h as f32 / fh as f32);
-    let scale = (fit * zoom.max(0.01)).max(0.001);
-    let dw = ((fw as f32 * scale) as u32).clamp(1, u32::MAX);
-    let dh = ((fh as f32 * scale) as u32).clamp(1, u32::MAX);
-    let ox = (buf_w as i32 - dw as i32) / 2;
-    let oy = (buf_h as i32 - dh as i32) / 2;
-    (dw, dh, ox, oy)
+    let mut v = vec![fit, 1.0, 2.0, 3.0, 4.0, 6.0];
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    v
 }
 
-/// One wheel/keypress step of manual zoom.
-fn zoom_step(current: f32, up: bool) -> f32 {
-    const MIN: f32 = 0.25;
-    const MAX: f32 = 5.0;
-    const STEP: f32 = 1.25;
-    let next = if up {
-        current * STEP
+/// Move one step along the ladder, clamped at both ends.
+fn ladder_step(idx: usize, delta: i32, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (idx as i64 + delta as i64).clamp(0, len as i64 - 1) as usize
+}
+
+/// Keep the pan offset inside what the drawn rectangle allows: a picture
+/// bigger than the window can slide up to its edges, a smaller one is
+/// centred no matter what was asked.
+fn clamp_pan(pan_x: i64, pan_y: i64, bw: i64, bh: i64, dw: i64, dh: i64) -> (i32, i32) {
+    let x = if dw >= bw {
+        pan_x.clamp(bw - dw, 0)
     } else {
-        current / STEP
+        (bw - dw) / 2
     };
-    next.clamp(MIN, MAX)
+    let y = if dh >= bh {
+        pan_y.clamp(bh - dh, 0)
+    } else {
+        (bh - dh) / 2
+    };
+    (x as i32, y as i32)
+}
+
+/// Where the frame lands inside the window at the given scale and pan,
+/// keeping the aspect ratio: `(draw_w, draw_h, off_x, off_y)` in window
+/// pixels. Offsets come from the clamped pan, so the drawn rect is always
+/// where the user left it — centred when the pan is untouched.
+fn draw_geometry(
+    buf_w: u32,
+    buf_h: u32,
+    fw: usize,
+    fh: usize,
+    scale: f32,
+    pan_x: i32,
+    pan_y: i32,
+) -> (u32, u32, i32, i32) {
+    let (fw, fh) = (fw.max(1), fh.max(1));
+    let s = scale.max(0.001);
+    let dw = ((fw as f32 * s) as u32).clamp(1, u32::MAX);
+    let dh = ((fh as f32 * s) as u32).clamp(1, u32::MAX);
+    let (ox, oy) = clamp_pan(
+        pan_x as i64,
+        pan_y as i64,
+        buf_w as i64,
+        buf_h as i64,
+        dw as i64,
+        dh as i64,
+    );
+    (dw, dh, ox, oy)
 }
 
 /// Map a position in window pixels to absolute RFB pointer coordinates
@@ -532,19 +651,16 @@ fn pointer_to_host(
     buf_h: u32,
     fw: usize,
     fh: usize,
-    zoom: f32,
+    scale: f32,
+    pan_x: i32,
+    pan_y: i32,
 ) -> (u16, u16) {
-    let (_dw, _dh, ox, oy) = draw_geometry(buf_w, buf_h, fw, fh, zoom);
+    let (_dw, _dh, ox, oy) = draw_geometry(buf_w, buf_h, fw, fh, scale, pan_x, pan_y);
     let (fw, fh) = (fw.max(1) as f64, fh.max(1) as f64);
-    // Recompute the float scale the same way draw_geometry does.
-    let fit = (buf_w as f32 / fw as f32).min(buf_h as f32 / fh as f32);
-    let scale = (fit * zoom.max(0.01)) as f64;
-    let fx = ((x - ox as f64) / scale).clamp(0.0, fw);
-    let fy = ((y - oy as f64) / scale).clamp(0.0, fh);
-    (
-        (fx / fw * 65535.0) as u16,
-        (fy / fh * 65535.0) as u16,
-    )
+    let s = scale.max(0.001) as f64;
+    let fx = ((x - ox as f64) / s).clamp(0.0, fw);
+    let fy = ((y - oy as f64) / s).clamp(0.0, fh);
+    ((fx / fw * 65535.0) as u16, (fy / fh * 65535.0) as u16)
 }
 
 #[cfg(test)]
@@ -552,48 +668,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zoom_step_grows_and_clamps_at_the_top() {
-        let z = zoom_step(1.0, true);
-        assert!((z - 1.25).abs() < 1e-6);
-        let maxed = zoom_step(5.0, true);
-        assert!((maxed - 5.0).abs() < 1e-6, "zoom must clamp at 5.0");
+    fn zoom_ladder_is_fit_then_integer_multiples() {
+        // Fit is 0.5: the ladder keeps it and adds the integer scales.
+        let ladder = zoom_ladder(1000, 500, 2000, 1000);
+        assert_eq!(ladder, vec![0.5, 1.0, 2.0, 3.0, 4.0, 6.0]);
     }
 
     #[test]
-    fn zoom_step_shrinks_and_clamps_at_the_bottom() {
-        let z = zoom_step(1.0, false);
-        assert!((z - 0.8).abs() < 1e-6);
-        let mined = zoom_step(0.25, false);
-        assert!((mined - 0.25).abs() < 1e-6, "zoom must clamp at 0.25");
+    fn zoom_ladder_dedupes_when_fit_is_already_integer() {
+        let ladder = zoom_ladder(1000, 500, 1000, 500);
+        assert_eq!(ladder, vec![1.0, 2.0, 3.0, 4.0, 6.0]);
     }
 
     #[test]
-    fn draw_geometry_at_zoom_one_fits_the_window_exactly() {
-        // Window is half the frame in both axes: exact fit, no offset.
-        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 2000, 1000, 1.0);
+    fn ladder_step_clamps_at_both_ends() {
+        assert_eq!(ladder_step(0, -1, 6), 0);
+        assert_eq!(ladder_step(0, 1, 6), 1);
+        assert_eq!(ladder_step(5, 1, 6), 5);
+        assert_eq!(ladder_step(2, -3, 6), 0);
+        assert_eq!(ladder_step(0, 1, 0), 0, "an empty ladder must not panic");
+    }
+
+    #[test]
+    fn clamp_pan_lets_a_zoomed_picture_slide_to_its_edges() {
+        // Picture twice the window: pan range is [-1000..0] x [-500..0].
+        assert_eq!(clamp_pan(0, 0, 1000, 500, 2000, 1000), (0, 0));
+        assert_eq!(clamp_pan(-1000, -500, 1000, 500, 2000, 1000), (-1000, -500));
+        assert_eq!(
+            clamp_pan(-2000, 500, 1000, 500, 2000, 1000),
+            (-1000, 0),
+            "overshoot clamps to the nearest edge"
+        );
+    }
+
+    #[test]
+    fn clamp_pan_centers_a_picture_smaller_than_the_window() {
+        assert_eq!(clamp_pan(-999, 999, 1000, 500, 500, 250), (250, 125));
+    }
+
+    #[test]
+    fn draw_geometry_honours_the_pan() {
+        // Zoomed picture, panned hard left: the offset survives.
+        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 1000, 500, 2.0, -1000, -500);
+        assert_eq!((dw, dh, ox, oy), (2000, 1000, -1000, -500));
+        // Fit-sized picture: always centred.
+        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 2000, 1000, 0.5, -500, -250);
         assert_eq!((dw, dh, ox, oy), (1000, 500, 0, 0));
-    }
-
-    #[test]
-    fn draw_geometry_letterboxes_at_zoom_one_when_ratios_differ() {
-        // Frame twice as wide as tall, window square: fit on height, black
-        // bars left and right.
-        let (dw, dh, ox, oy) = draw_geometry(1000, 1000, 2000, 1000, 1.0);
-        assert_eq!((dw, dh, ox, oy), (1000, 500, 0, 250));
-    }
-
-    #[test]
-    fn draw_geometry_zoomed_past_the_window_crops_centered() {
-        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 1000, 500, 2.0);
-        assert_eq!((dw, dh), (2000, 1000));
-        assert_eq!((ox, oy), (-500, -250));
-    }
-
-    #[test]
-    fn draw_geometry_zoomed_below_one_shrinks_inside_black_bars() {
-        let (dw, dh, ox, oy) = draw_geometry(1000, 500, 1000, 500, 0.5);
-        assert_eq!((dw, dh), (500, 250));
-        assert_eq!((ox, oy), (250, 125));
     }
 
     #[test]
@@ -601,12 +721,12 @@ mod tests {
         // Exact fit at 0.5x: the frame fills the window, so the window centre
         // (500, 250) is the frame centre, and (250, 125) is a quarter of the
         // way across.
-        let (hx, hy) = pointer_to_host(500.0, 250.0, 1000, 500, 2000, 1000, 1.0);
+        let (hx, hy) = pointer_to_host(500.0, 250.0, 1000, 500, 2000, 1000, 0.5, 0, 0);
         assert!(
             (hx as i32 - 32767).abs() <= 1 && (hy as i32 - 32767).abs() <= 1,
             "got ({hx}, {hy})"
         );
-        let (hx, hy) = pointer_to_host(250.0, 125.0, 1000, 500, 2000, 1000, 1.0);
+        let (hx, hy) = pointer_to_host(250.0, 125.0, 1000, 500, 2000, 1000, 0.5, 0, 0);
         assert!(
             (hx as i32 - 16383).abs() <= 1 && (hy as i32 - 16383).abs() <= 1,
             "got ({hx}, {hy})"
@@ -618,22 +738,32 @@ mod tests {
         // Letterboxed: frame spans the full width, black bars top and bottom.
         // Window (100, 100) is above the picture: x is a tenth of the way in,
         // y clamps to the top edge.
-        let (hx, hy) = pointer_to_host(100.0, 100.0, 1000, 1000, 2000, 1000, 1.0);
+        let (hx, hy) = pointer_to_host(100.0, 100.0, 1000, 1000, 2000, 1000, 0.5, 0, 0);
         assert!((hx as i32 - 6553).abs() <= 1, "got ({hx}, {hy})");
         assert_eq!(hy, 0);
+    }
 
-        // Zoomed in 2x the window shows the central half of the frame, so the
-        // window centre is still the frame centre and the window top-left
-        // corner is a quarter of the way into the frame, not its edge.
-        let (hx, hy) = pointer_to_host(500.0, 250.0, 1000, 500, 1000, 500, 2.0);
+    #[test]
+    fn pointer_follows_the_pan() {
+        // 2x on a half-size window, dead-centre pan (-500, -250): the
+        // picture is centred, so the window centre is still the frame centre.
+        let (hx, hy) = pointer_to_host(500.0, 250.0, 1000, 500, 1000, 500, 2.0, -500, -250);
         assert!(
             (hx as i32 - 32767).abs() <= 1 && (hy as i32 - 32767).abs() <= 1,
             "got ({hx}, {hy})"
         );
-        let (hx, hy) = pointer_to_host(0.0, 0.0, 1000, 500, 1000, 500, 2.0);
+        // Panned to the far left edge (-1000, -500): the window's top-left
+        // corner now shows the frame's centre.
+        let (hx, hy) = pointer_to_host(0.0, 0.0, 1000, 500, 1000, 500, 2.0, -1000, -500);
         assert!(
-            (hx as i32 - 16383).abs() <= 1 && (hy as i32 - 16383).abs() <= 1,
+            (hx as i32 - 32767).abs() <= 1 && (hy as i32 - 32767).abs() <= 1,
             "got ({hx}, {hy})"
+        );
+        // Same far-left pan, window centre: three quarters into the frame.
+        let (hx, _hy) = pointer_to_host(500.0, 250.0, 1000, 500, 1000, 500, 2.0, -1000, -500);
+        assert!(
+            (hx as i32 - 49151).abs() <= 1,
+            "got {hx}"
         );
     }
 }
