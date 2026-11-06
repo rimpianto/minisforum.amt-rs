@@ -37,7 +37,7 @@ test commands, hardware verification recipes — lives in
 [docs/getting-started.md](docs/getting-started.md) and
 [docs/testing.md](docs/testing.md).
 
-## State at 1.3.0
+## State at 1.3.1
 
 | Area | State |
 |---|---|

@@ -98,7 +98,7 @@ The command prints its version, the configuration file it actually read, and
 the configured targets. An asterisk marks the default machine:
 
 ```text
-amt-cli 1.3.0 (<commit>)
+amt-cli 1.3.1 (<commit>)
 config: /Users/yourname/.config/amt/config.yaml
 * lab  192.0.2.10:16993  wsman 16993  redirection 16995  user admin
 ```
@@ -159,7 +159,7 @@ The graphical window opens and the launching terminal becomes an interactive
 control console:
 
 ```text
-amt-rs 1.3.0 - KVM window is live
+amt-rs 1.3.1 - KVM window is live
   machine: lab (use <name> to switch, machines to list)
   status | bios | bios status | bios cancel | boot-bios
   on | off | reset | cycle | quit  (help for this list)
