@@ -1,0 +1,267 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, for example v1.3.0"
+        required: true
+        type: string
+      publish:
+        description: "Publish or update the GitHub release"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  GH_REPO: ${{ github.repository }}
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-amd64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: amt-cli.exe
+          - platform: windows-arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: amt-cli.exe
+          - platform: linux-amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: amt-cli
+          - platform: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            binary: amt-cli
+
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Check out packaging tooling for an older tag
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          path: .release-tooling
+
+      - name: Install the Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up Python for packaging
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Validate the tag against the crate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if [[ "$VERSION" == "$RELEASE_TAG" ]]; then
+            echo "Release tag must start with v: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          MANIFEST_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/amt-cli/Cargo.toml | head -1)
+          if [[ "$VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "Tag $RELEASE_TAG does not match amt-cli $MANIFEST_VERSION" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Test the target
+        shell: bash
+        run: cargo test --workspace --locked --target "${{ matrix.target }}"
+
+      - name: Build the release binary
+        shell: bash
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Smoke-test the executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          "$BINARY" --version
+          "$BINARY" --version | grep -F "amt-cli $VERSION ("
+          "$BINARY" --help >/dev/null
+
+      - name: Package the release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGER="scripts/package-release.py"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            PACKAGER=".release-tooling/scripts/package-release.py"
+          fi
+          python "$PACKAGER" \
+            --root "$GITHUB_WORKSPACE" \
+            --version "$VERSION" \
+            --platform "${{ matrix.platform }}" \
+            --binary "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            --output-dir dist
+
+      - name: Upload the platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: Assemble and verify release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download every platform package
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify downloaded package hashes
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c *.sha256
+
+      - name: Build the release manifest and notes
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          export VERSION
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          tag = os.environ["RELEASE_TAG"]
+          dist = Path("dist")
+          platforms = {
+              "windows-amd64": ("Windows AMD64", "zip"),
+              "windows-arm64": ("Windows ARM64", "zip"),
+              "linux-amd64": ("Linux AMD64", "tar.gz"),
+              "macos-arm64": ("macOS Apple Silicon", "tar.gz"),
+          }
+
+          rows = []
+          checksums = []
+          for platform, (label, suffix) in platforms.items():
+              name = f"amt-cli-{version}-{platform}.{suffix}"
+              archive = dist / name
+              if not archive.is_file():
+                  raise SystemExit(f"Missing release archive: {archive}")
+              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+              checksums.append(f"{digest}  {name}")
+              rows.append(f"| {name} | {label} | {digest} |")
+
+          (dist / "SHA256SUMS").write_text(
+              "\n".join(checksums) + "\n", encoding="utf-8"
+          )
+          notes = f"""# amt-cli {version}
+
+          Built and tested on GitHub Actions from tag `{tag}`.
+
+          ## Assets
+
+          | File | Platform | SHA256 |
+          |---|---|---|
+          {chr(10).join(rows)}
+
+          Each archive contains the binary, LICENSE, README, example configuration
+          and available platform guides. `SHA256SUMS` covers every release archive.
+          """
+          Path("release-notes.md").write_text(notes, encoding="utf-8")
+          PY
+          cd dist
+          sha256sum -c SHA256SUMS
+
+      - name: Upload the verified release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ env.RELEASE_TAG }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' || inputs.publish
+    needs: assemble
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the verified release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-${{ env.RELEASE_TAG }}
+          path: release
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "amt-cli $VERSION" \
+              --notes-file release/release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "amt-cli $VERSION" \
+              --notes-file release/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" \
+            release/*.zip \
+            release/*.tar.gz \
+            release/SHA256SUMS \
+            --clobber
+
+      - name: Verify the published assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          for asset in \
+            "amt-cli-$VERSION-windows-amd64.zip" \
+            "amt-cli-$VERSION-windows-arm64.zip" \
+            "amt-cli-$VERSION-linux-amd64.tar.gz" \
+            "amt-cli-$VERSION-macos-arm64.tar.gz" \
+            "SHA256SUMS"; do
+            gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fx "$asset"
+          done
