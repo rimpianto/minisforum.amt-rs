@@ -14,6 +14,7 @@ PLATFORMS = {
     "windows-amd64": ("amt-cli.exe", ".zip"),
     "windows-arm64": ("amt-cli.exe", ".zip"),
     "linux-amd64": ("amt-cli", ".tar.gz"),
+    "linux-arm64": ("amt-cli", ".tar.gz"),
     "macos-arm64": ("amt-cli", ".tar.gz"),
 }
 

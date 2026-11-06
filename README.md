@@ -92,10 +92,9 @@ cargo build --release
 
 Releases are fully automated. A `Release amt-cli X.Y.Z` commit bumps the
 version, the `vX.Y.Z` tag is pushed, and the release workflow builds binaries
-for windows-amd64, windows-arm64, linux-amd64 and macos-arm64, assembles the
-archives, and publishes them together with a `SHA256SUMS` file - no manual
-packaging. The linux-arm64 archive is built natively on an aarch64 Linux host
-and attached to the release.
+for windows-amd64, windows-arm64, linux-amd64, linux-arm64 and macos-arm64,
+assembles the archives, and publishes them together with a `SHA256SUMS` file
+- no manual packaging.
 
 Everything a developer needs — build prerequisites for Windows/macOS/Linux,
 test commands, hardware verification recipes — lives in

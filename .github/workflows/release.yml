@@ -48,6 +48,10 @@ jobs:
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: amt-cli
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: amt-cli
           - platform: macos-arm64
             runner: macos-latest
             target: aarch64-apple-darwin
@@ -182,6 +186,7 @@ jobs:
               "windows-amd64": ("Windows AMD64", "zip"),
               "windows-arm64": ("Windows ARM64", "zip"),
               "linux-amd64": ("Linux AMD64", "tar.gz"),
+              "linux-arm64": ("Linux ARM64", "tar.gz"),
               "macos-arm64": ("macOS Apple Silicon", "tar.gz"),
           }
 
@@ -277,6 +282,7 @@ jobs:
             "amt-cli-$VERSION-windows-amd64.zip" \
             "amt-cli-$VERSION-windows-arm64.zip" \
             "amt-cli-$VERSION-linux-amd64.tar.gz" \
+            "amt-cli-$VERSION-linux-arm64.tar.gz" \
             "amt-cli-$VERSION-macos-arm64.tar.gz" \
             "SHA256SUMS"; do
             gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fx "$asset"

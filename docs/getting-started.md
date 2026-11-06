@@ -17,9 +17,8 @@ values for your own AMT device.
   somewhere on your PATH, and continue from
   [section 2](#2-create-a-local-configuration).
   Release archives are built automatically on every `vX.Y.Z` tag for
-  windows-amd64, windows-arm64, linux-amd64 and macos-arm64, and published
-  with a `SHA256SUMS` file. The linux-arm64 archive is built natively on an
-  aarch64 Linux host and attached to the release.
+  windows-amd64, windows-arm64, linux-amd64, linux-arm64 and macos-arm64,
+  and published with a `SHA256SUMS` file.
 - **Developer** — you want to read or change the code: start at
   [section 1](#1-build-the-executable) and keep reading.
 
