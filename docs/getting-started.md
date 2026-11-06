@@ -131,10 +131,10 @@ running.
 
 ### ME 16 compatibility note
 
-On the tested ME 16 firmware, KVM works but `amt-cli power` currently fails
-during the initial WS-Man TLS handshake with `received fatal alert:
-InternalError`. This is a known client TLS compatibility issue, not proof that
-the password is wrong. See [../TODO.md](../TODO.md).
+The WS-Man transport supports the legacy TLS behaviour required by ME 16. An
+authenticated power-state read is verified on MS-01 (ME 16) and MS-02. Only
+power-state reads are claimed on ME 16; power changes have not been commanded
+on that firmware.
 
 ## 5. Open the KVM console
 
@@ -304,9 +304,11 @@ console available. Correct the network or firmware issue, then type
 ### `power` fails while KVM works
 
 Power operations use WS-Man; KVM uses the redirection service. They have
-separate ports, authentication exchanges and TLS paths. On ME 16, the known
-WS-Man TLS limitation can produce exactly this split: KVM works while `power`
-fails before the first authenticated response.
+separate ports, authentication exchanges and TLS paths. A successful KVM
+session therefore does not prove that WS-Man is reachable or authenticated;
+inspect the WS-Man error independently. Older builds could fail that WS-Man
+handshake on ME 16 while KVM worked; the current transport supports the legacy
+TLS behaviour required by that firmware.
 
 ## 10. Glossary
 

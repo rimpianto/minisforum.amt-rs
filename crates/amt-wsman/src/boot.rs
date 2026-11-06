@@ -2,7 +2,8 @@
 //! has to hit Delete in a window of a few hundred milliseconds.
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::{header, Client, Url};
+use hyper::Uri;
+use crate::transport::WsManClient;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -18,7 +19,8 @@ async fn call(
     selectors: &str,
     body: &str,
 ) -> Result<String> {
-    let url = Url::parse(&format!("https://{}:{}/wsman", cfg.host, cfg.port))
+    let url = format!("https://{}:{}/wsman", cfg.host, cfg.port)
+        .parse::<Uri>()
         .context("invalid WS-Man URL")?;
     let msg_id = Uuid::new_v4().to_string();
 
@@ -33,31 +35,20 @@ async fn call(
         eprintln!("--- SOAP REQUEST ---\n{envelope}\n--- END ---");
     }
 
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(20))
-        .build()
-        .context("failed to build HTTP client")?;
+    let client = WsManClient::new(Duration::from_secs(20))?;
 
     let first = client
-        .post(url.clone())
-        .header(header::CONTENT_TYPE, "application/soap+xml; charset=UTF-8")
-        .body(envelope.clone())
-        .send()
+        .post(url.clone(), envelope.clone(), None)
         .await
         .context("WS-Man request failed")?;
 
-    if first.status().is_success() {
-        return Ok(first.text().await.unwrap_or_default());
+    if first.status.is_success() {
+        return Ok(first.body);
     }
 
     let www_auth = first
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .ok_or_else(|| anyhow!("WWW-Authenticate missing"))?
-        .to_str()
-        .context("bad WWW-Authenticate header")?
-        .to_string();
+        .www_authenticate
+        .ok_or_else(|| anyhow!("WWW-Authenticate missing"))?;
 
     let mut pw = http_auth::PasswordClient::try_from(www_auth.as_str())
         .map_err(|e| anyhow!("cannot parse Digest challenge: {e}"))?;
@@ -72,16 +63,12 @@ async fn call(
         .map_err(|e| anyhow!("digest auth error: {e}"))?;
 
     let second = client
-        .post(url)
-        .header(header::CONTENT_TYPE, "application/soap+xml; charset=UTF-8")
-        .header(header::AUTHORIZATION, auth_header)
-        .body(envelope)
-        .send()
+        .post(url, envelope, Some(auth_header))
         .await
         .context("authenticated WS-Man request failed")?;
 
-    let status = second.status();
-    let text = second.text().await.unwrap_or_default();
+    let status = second.status;
+    let text = second.body;
     if !status.is_success() {
         return Err(anyhow!("WS-Man returned {status} - {text}"));
     }

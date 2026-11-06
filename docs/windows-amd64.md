@@ -12,12 +12,12 @@ MSVC toolchain on Windows itself, with no WSL, MinGW or Cygwin involved.
 | Rust target | `x86_64-pc-windows-msvc` |
 | Visual Studio Build Tools | 18.11.12328.437, workload *Desktop development with C++* (MSVC v143+ linker and Windows SDK) |
 | Git | 2.53.0.windows.3 |
+| Strawberry Perl | `perl.exe` available in `PATH`; required to build the vendored OpenSSL WS-Man transport |
 
-CMake and NASM are **not** required: although `aws-lc-sys` appears in
-`Cargo.lock` as a transitive dependency, the TLS stacks actually compiled are
-`ring` (amt-redir, tokio-rustls) and reqwest's rustls binding, so the C-based
-aws-lc build never runs. If a future dependency activates aws-lc-sys, CMake and
-NASM will become mandatory on Windows.
+The current build compiles vendored OpenSSL for WS-Man in addition to the
+existing `ring`/rustls TLS stack used by redirection. OpenSSL's `Configure`
+script requires Perl; install Strawberry Perl and open a new PowerShell session
+so that `perl --version` works before building. NASM remains optional.
 
 Check that the target is installed:
 
@@ -143,12 +143,11 @@ Not yet verified on Windows, listed explicitly:
   in pre-existing code on every platform; the Windows port did not introduce
   new ones.
 
-## The ME 16 WS-Man TLS issue is a separate problem
+## ME 16 WS-Man TLS compatibility
 
-On MS-01 hardware running Intel ME 16, `amt-cli power` fails during the
-initial WS-Man TLS handshake (`received fatal alert: InternalError`) on Linux
-as well. Reproduced identically from the Windows build. It is a client/firmware
-TLS compatibility issue tracked in [TODO.md](../TODO.md) and
-[the README](../README.md#known-compatibility-limitation-me-16-ws-man-tls) —
-it predates the Windows port and is not fixed or claimed fixed by it. KVM and
-the redirection TLS path are unaffected.
+The handshake failure reproduced from Windows was a shared client/firmware
+compatibility issue, not a Windows-specific defect. The shared WS-Man transport
+now uses vendored OpenSSL with TLS 1.2 and `SSL_OP_LEGACY_SERVER_CONNECT`.
+Authenticated power-state reads pass from Linux and macOS on MS-01 (ME 16) and
+MS-02. The Windows build with this new transport still needs platform
+verification.

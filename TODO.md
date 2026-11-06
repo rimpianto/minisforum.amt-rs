@@ -5,6 +5,9 @@ do next, not by what is easiest.
 
 ## Done after 1.0.0
 
+- [x] WS-Man TLS compatibility with ME 16: vendored OpenSSL/TLS 1.2 with
+      `SSL_OP_LEGACY_SERVER_CONNECT`; authenticated power-state reads pass on
+      MS-01 (ME 16) and MS-02. Power changes on ME 16 are not claimed
 - [x] Several machines in the config (1.1.0): `--machine`, `machines`,
       `use <name>` in the KVM console, legacy single-machine file still loads
 
@@ -23,12 +26,6 @@ do next, not by what is easiest.
 
 ## Next
 
-- [ ] **WS-Man TLS compatibility with ME 16.** On the tested MS-01, KVM works
-      but `amt-cli power` fails during the initial WS-Man TLS handshake with
-      `InternalError`; an independent client succeeds after enabling the legacy
-      TLS behaviour required by that firmware. *Done when* the stock Rust
-      client completes an authenticated power-state read on ME 16 without a
-      separate compatibility wrapper, and the existing MS-02 path still passes.
 - [ ] **Dirty-rectangle updates.** Today every new frame is rescanned and
       rescaled entirely. *Done when* a keystroke repaints only the tiles that
       changed and CPU stays low with the window open for an hour.
