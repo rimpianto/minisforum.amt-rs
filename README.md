@@ -1,17 +1,73 @@
-# amt-rs — a native Intel AMT/vPro client
+# amt-rs — native Intel AMT/vPro management in Rust
 
-`amt-rs` is a Rust client for Intel AMT/vPro: power control, KVM with working
-keyboard and mouse, boot-to-BIOS setup, Serial-over-LAN, and multiple machines
-from one configuration file. It provides one `amt-cli` binary, with no Node.js
-runtime or browser required.
+Intel Active Management Technology (AMT), available on supported Intel vPro
+systems, provides hardware-level remote management independently of the
+installed operating system. It can be used to recover an unresponsive machine,
+change its power state, access the BIOS/UEFI setup, view and control the remote
+console through KVM, or use Serial-over-LAN. Unlike conventional remote-desktop
+software, these functions do not require an agent running inside the operating
+system.
 
-The project was originally developed against a Minisforum MS-02 Ultra and now
-lives in its own repository. Hardware validation also includes a Minisforum
-MS-01; support is not tied to a particular Minisforum model.
+`amt-rs` is a native Rust client for these capabilities. It provides power
+control, KVM with keyboard and mouse input, boot-to-BIOS setup, Serial-over-LAN,
+and management of multiple machines from a single configuration file.
+Everything is available through one `amt-cli` binary, without requiring a
+Node.js runtime or a browser.
 
-MeshCommander remains the protocol reference. This client was written by
-observing and documenting the wire protocols rather than embedding a browser
-or a Node.js process.
+For now, `amt-rs` is developed as a subsystem of the MeshCommander project
+rather than as a replacement for the entire project. MeshCommander remains the
+protocol reference: `amt-rs` was written by observing and documenting the wire
+protocols, not by embedding MeshCommander's browser interface or Node.js
+process.
+
+Development and initial hardware validation used a Minisforum MS-02 Ultra, with
+additional validation on a Minisforum MS-01. However, `amt-rs` is intended for
+supported Intel AMT/vPro hardware in general and is not tied to a particular
+Minisforum model.
+
+## Glossary
+
+- **Intel vPro**: Intel's platform for business PCs. AMT is available on
+  supported vPro systems; the hardware must support AMT and the feature must be
+  provisioned before `amt-rs` can connect.
+- **ME (Intel Management Engine)**: firmware subsystem integrated into the
+  chipset. It remains available when the operating system is off, provided the
+  machine still has power, and supplies the platform's manageability functions.
+- **AMT (Intel Active Management Technology)**: the Intel vPro feature set
+  exposed by the ME, including remote power control, WS-Man, KVM, SOL and IDER.
+- **Out-of-band management**: remote management through firmware rather than
+  through an agent in the installed operating system. AMT can remain available
+  when the operating system is not running, provided the machine has power and
+  its management network remains reachable.
+- **KVM (Keyboard, Video, Mouse)**: remote-console access that carries video
+  from the managed machine and keyboard and mouse input back to it. On systems
+  with KVM support, this includes POST and BIOS/UEFI screens as well as the
+  operating-system console.
+- **SOL (Serial-over-LAN)**: redirection of a serial console over the network.
+  It is useful for text-based firmware and operating-system consoles when SOL
+  is enabled and the managed system is configured to use a serial console.
+- **BIOS/UEFI and POST**: BIOS or UEFI is the system firmware that initializes
+  and boots a machine; POST is its power-on self-test. The `bios` command asks
+  AMT to stop at the firmware setup screen on the next boot; `boot-bios` also
+  resets the machine immediately.
+- **MEBx (Intel Management Engine BIOS Extension)**: firmware menu used to
+  configure ME and AMT, normally opened during POST with Ctrl+P.
+- **WS-Man (Web Services for Management)**: SOAP-based management protocol. On
+  the documented AMT setups it is reached over HTTPS on TCP port 16993 and uses
+  Digest authentication.
+- **IDER / USB-R (IDE Redirection / USB Redirection)**: AMT mechanisms for
+  redirecting remote boot media or USB devices. They are not currently
+  implemented by `amt-rs`.
+- **MEI (Management Engine Interface)**: Linux interface to the ME. A working
+  `/dev/mei0` device backed by the `mei_me` driver shows that the local Linux
+  communication stack is present.
+- **VFIO**: kernel framework for assigning PCI devices away from their normal
+  host drivers. In the MS-01 setup, `vfio-pci` selectively reserves the
+  I226-LM, preventing `igc` from exposing it as a Linux network interface while
+  the other I226-V remains available to Linux.
+- **MeshCommander**: the Intel AMT management project of which `amt-rs` is
+  currently a subsystem and whose wire protocols are the reference for this
+  implementation.
 
 ## Two ways to get amt-cli
 
@@ -100,26 +156,6 @@ no-op when the machine is already running.
 For a guided first run, including expected output, the default five-second KVM
 timeout, interactive commands and troubleshooting, read
 [**Getting started with amt-cli**](docs/getting-started.md).
-
-## Glossary
-
-- **ME (Intel Management Engine)**: firmware subsystem integrated into the
-  chipset. It remains available when the operating system is off, provided the
-  machine still has power, and supplies the platform's manageability functions.
-- **AMT (Intel Active Management Technology)**: the Intel vPro feature set
-  exposed by the ME, including remote power control, WS-Man, KVM, SOL and IDER.
-- **MEBx (Intel Management Engine BIOS Extension)**: firmware menu used to
-  configure ME and AMT, normally opened during POST with Ctrl+P.
-- **WS-Man (Web Services for Management)**: SOAP-based management protocol. On
-  the documented AMT setups it is reached over HTTPS on TCP port 16993 and uses
-  Digest authentication.
-- **MEI (Management Engine Interface)**: Linux interface to the ME. A working
-  `/dev/mei0` device backed by the `mei_me` driver shows that the local Linux
-  communication stack is present.
-- **VFIO**: kernel framework for assigning PCI devices away from their normal
-  host drivers. In the MS-01 setup, `vfio-pci` selectively reserves the
-  I226-LM, preventing `igc` from exposing it as a Linux network interface while
-  the other I226-V remains available to Linux.
 
 ## Configuration
 
@@ -332,8 +368,8 @@ items include dirty-rectangle rendering, IDER, and clipboard support.
 
 Versions through 1.0.0 followed the commit count. Starting with 1.0.0, version
 numbers are assigned deliberately. Release state is recorded with annotated
-tags; the migration to this standalone repository preserves the v1.0.0 through
-v1.2.4 tags and the `amt-rs/` project history.
+tags; this repository preserves the v1.0.0 through v1.2.4 tags and the
+`amt-rs/` project history.
 
 ## License
 
