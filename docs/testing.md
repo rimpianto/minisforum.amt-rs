@@ -112,14 +112,22 @@ With no `--state`, this is a read-only operation. It should print a numeric
 `PowerState` and its human-readable name. `RequestedPowerState` is not exposed
 by every firmware and its absence is not an error.
 
-### ME 16 compatibility caveat
+### ME 16 compatibility note
 
-On the tested ME 16 firmware, the KVM path works but `amt-cli power` currently
-fails during the initial WS-Man TLS handshake with an `InternalError` alert.
-An independent WS-Man client succeeds only when the legacy TLS behaviour
-required by that firmware is enabled. Do not treat this as a credential error,
-and do not mark power operations as verified on ME 16 until the client issue
-is fixed and retested on hardware.
+The WS-Man transport supports the legacy TLS behaviour required by ME 16. An
+authenticated power-state read passes on MS-01 (ME 16) and MS-02. Only
+power-state reads are claimed on ME 16; power changes have not been commanded
+on that firmware.
+
+The ignored integration test exercises the same read against a real target:
+
+```sh
+AMT_TEST_HOST=192.0.2.10 AMT_TEST_PORT=16993 AMT_TEST_USER=admin AMT_TEST_PASS='CHANGE_ME' cargo test -p amt-wsman --test hardware -- --ignored --nocapture
+```
+
+Run it once against an ME 16 target and once against a modern target when
+changing the WS-Man transport. The test is ignored by default so normal builds
+do not require hardware or credentials.
 
 ## 5. Capture one frame without opening a window
 

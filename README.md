@@ -42,7 +42,7 @@ test commands, hardware verification recipes — lives in
 | Area | State |
 |---|---|
 | Power: `on` (2), `off` (8), `reset` (10), `power cycle` (5) | Works on the MS-02 Ultra, with `ReturnValue` validated |
-| Power-state query with human-readable names | Works on the MS-02 Ultra; see the ME 16 TLS limitation below |
+| Power-state query with human-readable names | Works on MS-02 Ultra and MS-01 (ME 16); see the TLS compatibility note below |
 | Redirection transport and AAAH handshake | Works on MS-02 and MS-01 hardware |
 | KVM video: RAW, RLE, palette-RLE and ZLIB decoders | Works: 1920x1080 RGB565, legible text and correct colours |
 | KVM window, keyboard and mouse | Works: integer scaling, resolution changes and automatic reconnection |
@@ -54,17 +54,13 @@ test commands, hardware verification recipes — lives in
 | Native Windows 11 AMD64 build | Builds with the MSVC toolchain; config, history and screenshots use Windows paths. KVM video and window verified on MS-02; mouse, resize and DPI still to verify — see [docs/windows-amd64.md](docs/windows-amd64.md) |
 | IDER / USB-R | Not implemented |
 
-### Known compatibility limitation: ME 16 WS-Man TLS
+### ME 16 WS-Man TLS compatibility
 
-On an MS-01 running Intel ME 16, KVM and the redirection TLS 1.2 path were
-verified successfully, but `amt-cli power` currently fails during the initial
-WS-Man TLS handshake with `received fatal alert: InternalError`. An independent
-Digest-authenticated WS-Man request succeeds when the client permits the legacy
-TLS behaviour required by that firmware. Credentials are not the cause.
-
-This is a client compatibility issue, not an AMT provisioning issue. It is
-tracked in [TODO.md](TODO.md); do not describe WS-Man power operations as
-verified on ME 16 until that limitation is fixed and tested on hardware.
+WS-Man uses a vendored OpenSSL connector with TLS 1.2 and
+`SSL_OP_LEGACY_SERVER_CONNECT` for firmware that does not implement RFC 5746
+secure renegotiation. An authenticated `amt-cli power` read passes on an MS-01
+running ME 16 and on the MS-02 Ultra. Only the power-state read is claimed on
+ME 16; power changes have not been commanded on that firmware.
 
 ## Quick start
 
@@ -324,8 +320,7 @@ operational artefacts, not files to commit indiscriminately.
 ## Roadmap and versioning
 
 The remaining work and acceptance criteria are in [TODO.md](TODO.md). Near-term
-items include ME 16 WS-Man TLS compatibility, dirty-rectangle rendering, IDER,
-and clipboard support.
+items include dirty-rectangle rendering, IDER, and clipboard support.
 
 Versions through 1.0.0 followed the commit count. Starting with 1.0.0, version
 numbers are assigned deliberately. Release state is recorded with annotated

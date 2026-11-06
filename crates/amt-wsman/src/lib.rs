@@ -4,6 +4,7 @@ mod envelope;
 mod cim;
 mod config;
 mod error;
+mod transport;
 
 pub use boot::{bios_boot_pending, set_bios_setup};
 pub use cim::PowerState;
@@ -11,7 +12,8 @@ pub use error::AmtWsManError;
 
 use anyhow::{anyhow, Context, Result};
 use uuid::Uuid;
-use reqwest::{header, Client, Url};
+use hyper::Uri;
+use crate::transport::WsManClient;
 use std::time::Duration;
 
 // Import the local config struct defined in this crate.
@@ -30,7 +32,7 @@ pub async fn set_power(cfg: &AmtConfig, state: PowerState) -> Result<()> {
     // 1️⃣ Build the target URL.
     // ---------------------------------------------------------------------
     let url = format!("https://{}:{}/wsman", cfg.host, cfg.port);
-    let url = Url::parse(&url).context("Invalid WS‑Man URL")?;
+    let url = url.parse::<Uri>().context("Invalid WS‑Man URL")?;
 
     // ---------------------------------------------------------------------
     // 2️⃣ Build the SOAP envelope (same XML MeshCommander sends).
@@ -42,26 +44,20 @@ pub async fn set_power(cfg: &AmtConfig, state: PowerState) -> Result<()> {
     }
 
     // ---------------------------------------------------------------------
-    // 3️⃣ Create a reqwest client that accepts self‑signed certificates.
+    // 3️⃣ Create an OpenSSL client that accepts self-signed certificates and
+    // supports the legacy TLS behaviour required by ME 16.
     // ---------------------------------------------------------------------
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(15))
-        .build()
-        .context("Failed to build HTTP client")?;
+    let client = WsManClient::new(Duration::from_secs(15))?;
 
     // ---------------------------------------------------------------------
     // 4️⃣ First request – expect a 401 with WWW‑Authenticate header.
     // ---------------------------------------------------------------------
     let first = client
-        .post(url.clone())
-        .header(header::CONTENT_TYPE, "application/soap+xml; charset=UTF-8")
-        .body(envelope.clone())
-        .send()
+        .post(url.clone(), envelope.clone(), None)
         .await
         .context("Initial WS‑Man request failed")?;
 
-    if first.status().is_success() {
+    if first.status.is_success() {
         // Some firmware allows unauthenticated power change – treat as success.
         return Ok(());
     }
@@ -70,11 +66,9 @@ pub async fn set_power(cfg: &AmtConfig, state: PowerState) -> Result<()> {
     // 5️⃣ Extract the Digest challenge and build the Authorization header.
     // ---------------------------------------------------------------------
     let www_auth = first
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .ok_or_else(|| anyhow!("WWW-Authenticate header missing"))?
-        .to_str()
-        .context("Invalid WWW-Authenticate header")?;
+        .www_authenticate
+        .as_deref()
+        .ok_or_else(|| anyhow!("WWW-Authenticate header missing"))?;
 
     // Parse the challenge using http_auth crate and build a PasswordClient.
     let mut pw_client = http_auth::PasswordClient::try_from(www_auth)
@@ -94,19 +88,15 @@ pub async fn set_power(cfg: &AmtConfig, state: PowerState) -> Result<()> {
     // 6️⃣ Authenticated request.
     // ---------------------------------------------------------------------
     let final_resp = client
-        .post(url)
-        .header(header::CONTENT_TYPE, "application/soap+xml; charset=UTF-8")
-        .header(header::AUTHORIZATION, auth_header)
-        .body(envelope)
-        .send()
+        .post(url, envelope, Some(auth_header))
         .await
         .context("Authenticated WS‑Man request failed")?;
 
     // ---------------------------------------------------------------
     // 7️⃣ Verify the WS‑Man response body contains a successful ReturnValue.
     // ---------------------------------------------------------------
-    let status = final_resp.status();
-    let body = final_resp.text().await.unwrap_or_default();
+    let status = final_resp.status;
+    let body = final_resp.body;
     if status.is_success() {
         // Look for <g:ReturnValue>0</g:ReturnValue>
         let ret_val = {
@@ -140,7 +130,7 @@ pub async fn set_power(cfg: &AmtConfig, state: PowerState) -> Result<()> {
 pub async fn get_power_state(cfg: &AmtConfig) -> Result<(u8, Option<u8>)> {
     // Build URL.
     let url = format!("https://{}:{}/wsman", cfg.host, cfg.port);
-    let url = Url::parse(&url).context("Invalid WS‑Man URL")?;
+    let url = url.parse::<Uri>().context("Invalid WS‑Man URL")?;
 
     // Build SOAP envelope for Get action.
     let msg_id = Uuid::new_v4().to_string();
@@ -156,33 +146,24 @@ pub async fn get_power_state(cfg: &AmtConfig) -> Result<(u8, Option<u8>)> {
     }
 
     // HTTP client, accept self‑signed certs.
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(15))
-        .build()
-        .context("Failed to build HTTP client")?;
+    let client = WsManClient::new(Duration::from_secs(15))?;
 
     // First request – expect 401.
     let first = client
-        .post(url.clone())
-        .header(header::CONTENT_TYPE, "application/soap+xml; charset=UTF-8")
-        .body(envelope.clone())
-        .send()
+        .post(url.clone(), envelope.clone(), None)
         .await
         .context("Initial WS‑Man request failed")?;
 
-    if first.status().is_success() {
-        let body = first.text().await.unwrap_or_default();
+    if first.status.is_success() {
+        let body = first.body;
         return parse_power_response(&body);
     }
 
     // Digest auth.
     let www_auth = first
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .ok_or_else(|| anyhow!("WWW-Authenticate header missing"))?
-        .to_str()
-        .context("Invalid WWW-Authenticate header")?;
+        .www_authenticate
+        .as_deref()
+        .ok_or_else(|| anyhow!("WWW-Authenticate header missing"))?;
     let mut pw_client = http_auth::PasswordClient::try_from(www_auth)
         .map_err(|e| anyhow!("Failed to parse WWW-Authenticate header for Digest auth: {}", e))?;
     let auth_header = pw_client
@@ -197,16 +178,12 @@ pub async fn get_power_state(cfg: &AmtConfig) -> Result<(u8, Option<u8>)> {
 
     // Authenticated request.
     let final_resp = client
-        .post(url)
-        .header(header::CONTENT_TYPE, "application/soap+xml; charset=UTF-8")
-        .header(header::AUTHORIZATION, auth_header)
-        .body(envelope)
-        .send()
+        .post(url, envelope, Some(auth_header))
         .await
         .context("Authenticated WS‑Man request failed")?;
 
-    let status = final_resp.status();
-    let body = final_resp.text().await.unwrap_or_default();
+    let status = final_resp.status;
+    let body = final_resp.body;
     if status.is_success() {
         parse_power_response(&body)
     } else {
