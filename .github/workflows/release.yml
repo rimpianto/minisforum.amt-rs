@@ -91,6 +91,11 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+      - name: Put Strawberry Perl first on the PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "C:\\Strawberry\\perl\\bin" >> "$GITHUB_PATH"
+
       - name: Test the target
         shell: bash
         run: cargo test --workspace --locked --target "${{ matrix.target }}"
