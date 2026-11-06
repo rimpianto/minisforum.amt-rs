@@ -203,15 +203,17 @@ jobs:
           cd dist
           sha256sum -c SHA256SUMS
 
+      - name: Flatten the release bundle
+        run: |
+          set -euo pipefail
+          mkdir release-bundle
+          cp dist/*.zip dist/*.tar.gz dist/SHA256SUMS release-notes.md release-bundle/
+
       - name: Upload the verified release bundle
         uses: actions/upload-artifact@v4
         with:
           name: release-bundle-${{ env.RELEASE_TAG }}
-          path: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/SHA256SUMS
-            release-notes.md
+          path: release-bundle/*
           if-no-files-found: error
           retention-days: 7
 
